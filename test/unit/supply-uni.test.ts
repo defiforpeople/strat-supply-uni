@@ -26,6 +26,8 @@ if (network.name !== ("hardhat" || "localhost")) {
     let daiAmount: BigNumber;
     let usdcAmount: BigNumber;
     let supplyUni: SupplyUni;
+    let lastId: BigNumber;
+    let positionManager: string;
 
     beforeEach(async () => {
       [owner, user] = await ethers.getSigners();
@@ -42,6 +44,9 @@ if (network.name !== ("hardhat" || "localhost")) {
 
       const tx = await supplyUni.addPool(dai.address, usdc.address, poolFee);
       await tx.wait();
+
+      lastId = (await supplyUni.poolCount()).sub(1);
+      positionManager = await supplyUni.nonfungiblePositionManager();
 
       const whale = await ethers.getImpersonatedSigner(WHALE);
       const whaleDaiBalance = await dai.balanceOf(whale.address);
@@ -67,15 +72,14 @@ if (network.name !== ("hardhat" || "localhost")) {
       await dai.connect(whale).transfer(owner.address, daiAmount);
       await usdc.connect(whale).transfer(owner.address, usdcAmount);
 
-      const daiOwnerBalance = await dai.balanceOf(owner.address);
-      const usdcOwnerBalance = await usdc.balanceOf(owner.address);
-      logger.info(`dai owner balance before: ${daiOwnerBalance}`);
-      logger.info(`usdc owner balance before: ${usdcOwnerBalance}`);
+      // const daiOwnerBalance = await dai.balanceOf(owner.address);
+      // const usdcOwnerBalance = await usdc.balanceOf(owner.address);
+      // logger.info(`dai owner balance before: ${daiOwnerBalance}`);
+      // logger.info(`usdc owner balance before: ${usdcOwnerBalance}`);
     });
 
     describe("addPool", () => {
       it("should initialize the pool correctly with the 0 id", async () => {
-        const lastId = (await supplyUni.poolCount()).sub(1);
         const {
           token0,
           token1,
@@ -90,21 +94,122 @@ if (network.name !== ("hardhat" || "localhost")) {
       });
     });
 
-    describe.only("mintNewPosition", () => {
-      it("Should mint a new position correctly", async () => {
-        const lastId = (await supplyUni.poolCount()).sub(1);
-
+    describe("mintNewPosition", () => {
+      it.only("should save correctly the state of the sender deposit in the contract", async () => {
+        const zero = BigNumber.from(0);
         logger.info("Transferring...");
-        await dai.connect(owner).approve(supplyUni.address, daiAmount);
-        await usdc.connect(owner).approve(supplyUni.address, usdcAmount);
+        await dai.approve(supplyUni.address, daiAmount);
+        await usdc.approve(supplyUni.address, usdcAmount);
+        logger.info("Transferred!");
+
+        const daiOwnerBalanceBefore = await dai.balanceOf(owner.address);
+        const usdcOwnerBalanceBefore = await usdc.balanceOf(owner.address);
+
+        logger.info(`dai owner balance  before: ${daiOwnerBalanceBefore}`);
+        logger.info(`usdc owner balance before: ${usdcOwnerBalanceBefore}`);
+
+        logger.info("Supplying...");
+        const tx = await supplyUni.mintNewPosition(
+          lastId,
+          daiAmount,
+          usdcAmount
+        );
+        await tx.wait();
+        logger.info("Supplied");
+
+        const { tokenId, liquidity, amount0, amount1 } =
+          await supplyUni.getOwnerInfo(owner.address, lastId);
+
+        logger.info(`tokenId ${tokenId}`);
+        logger.info(`liquidity ${liquidity}`);
+        logger.info(`amount0 ${amount0}`);
+        logger.info(`amount1 ${amount1}`);
+
+        const daiOwnerBalanceAfter = await dai.balanceOf(owner.address);
+        const usdcOwnerBalanceAfter = await usdc.balanceOf(owner.address);
+
+        expect(tokenId).to.be.gt(zero);
+        expect(amount0).to.be.eq(
+          daiOwnerBalanceBefore.sub(daiOwnerBalanceAfter)
+        );
+        expect(amount1).to.be.eq(
+          usdcOwnerBalanceBefore.sub(usdcOwnerBalanceAfter)
+        );
+        expect(liquidity).to.be.gt(zero);
+        // expect(liquidity).to.be.eq(amount0.add(amount1)); // For some reason, liquidity is NOT amount0 + amount1.
+        // The result is 999982856505346 while amount0 + amount1 is 999965713305537627532
+      });
+
+      it("Should mint a new position correctly, and update the sender balance when suproviding liquidity", async () => {
+        const zero = BigNumber.from(0);
+        logger.info("Transferring...");
+        await dai.approve(supplyUni.address, daiAmount);
+        await usdc.approve(supplyUni.address, usdcAmount);
+        logger.info("Transferred!");
+
+        const daiOwnerBalanceBefore = await dai.balanceOf(owner.address);
+        const usdcOwnerBalanceBefore = await usdc.balanceOf(owner.address);
+
+        logger.info(`dai owner balance  before: ${daiOwnerBalanceBefore}`);
+        logger.info(`usdc owner balance before: ${usdcOwnerBalanceBefore}`);
+
+        logger.info("Supplying...");
+        const tx = await supplyUni.mintNewPosition(
+          lastId,
+          daiAmount,
+          usdcAmount
+        );
+        await tx.wait();
+        logger.info("Supplied");
+
+        const daiOwnerBalanceAfter = await dai.balanceOf(owner.address);
+        const usdcOwnerBalanceAfter = await usdc.balanceOf(owner.address);
+        logger.info(`dai owner balance  After: ${daiOwnerBalanceAfter}`);
+        logger.info(`usdc owner balance After: ${usdcOwnerBalanceAfter}`);
+
+        const { amount0, amount1 } = await supplyUni.getOwnerInfo(
+          owner.address,
+          lastId
+        );
+
+        logger.info(`amount0 ${amount0}`);
+        logger.info(`amount1 ${amount1}`);
+
+        expect(amount0).to.be.gt(zero);
+        expect(amount1).to.be.gt(zero);
+
+        expect(daiOwnerBalanceAfter).to.be.eq(
+          daiOwnerBalanceBefore.sub(amount0)
+        );
+        expect(usdcOwnerBalanceAfter).to.be.eq(
+          usdcOwnerBalanceBefore.sub(amount1)
+        );
+
+        // doesn't work (the method 'changeTokenBalance' is bad):
+        // expect(tx).to.changeTokenBalance(dai, owner, -amount0);
+        // expect(tx).to.changeTokenBalance(usdc, owner, -amount1);
+      });
+
+      it("Should emit Deposit() event after minting a position", async () => {
+        logger.info("Transferring...");
+        await dai.approve(supplyUni.address, daiAmount);
+        await usdc.approve(supplyUni.address, usdcAmount);
         logger.info("Transferred!");
 
         logger.info("Supplying...");
-        const tx = await supplyUni
-          .connect(owner)
-          .mintNewPosition(lastId, daiAmount, usdcAmount);
+        const tx = await supplyUni.mintNewPosition(
+          lastId,
+          daiAmount,
+          usdcAmount
+        );
+        logger.info("Supplied");
 
-        expect(tx).to.emit(supplyUni, "Deposit");
+        const { tokenId } = await supplyUni.getOwnerInfo(owner.address, lastId);
+
+        // Events are not working correctly
+        expect(tx)
+          .to.emit(supplyUni, "Deposit")
+          .withArgs(owner.address, tokenId);
       });
     });
   });
