@@ -56,11 +56,11 @@ const config: HardhatUserConfig = {
         process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
     },
     hardhat: {
-      loggingEnabled: true,
+      loggingEnabled: false,
       forking: {
-        // enabled: true,
-        // url: "https://eth-mainnet.alchemyapi.io/v2/vtqCl_WPHwVu683HSlNFlL36pTaaWIJw",
-        url: "https://mainnet.infura.io/v3/bb2d1fa601ab406195e920f99f30fcfe",
+        enabled: true,
+        url: "https://eth-mainnet.alchemyapi.io/v2/vtqCl_WPHwVu683HSlNFlL36pTaaWIJw",
+        // url: "https://mainnet.infura.io/v3/bb2d1fa601ab406195e920f99f30fcfe",
       },
     },
   },
