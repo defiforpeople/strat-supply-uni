@@ -43,15 +43,15 @@ contract SupplyUni is IERC721Receiver, Ownable {
     mapping(uint256 => Pool) public pools;
 
     /// @notice Represents the deposit of an NFT
-    struct UserDeposit {
+    struct OwnerDeposit {
         uint256 tokenId;
         uint256 amount0;
         uint256 amount1;
         uint128 liquidity;
         bool initialized;
     }
-    /// @dev deposits[address][poolId] => UserDeposit
-    mapping(address => mapping(uint256 => UserDeposit)) public deposits;
+    /// @dev deposits[address][poolId] => OwnerDeposit
+    mapping(address => mapping(uint256 => OwnerDeposit)) public deposits;
 
     constructor() {}
 
@@ -204,6 +204,10 @@ contract SupplyUni is IERC721Receiver, Ownable {
         (tokenId, liquidity, amount0, amount1) = nonfungiblePositionManager
             .mint(params);
 
+        console.log("amount0", amount0);
+        console.log("amount1", amount1);
+        console.log("liquidity", liquidity);
+
         // Create a deposit
         _saveDeposit(
             poolId,
@@ -222,6 +226,12 @@ contract SupplyUni is IERC721Receiver, Ownable {
                 0
             );
             uint256 refund0 = amm0 - amount0;
+            console.log("refund0", refund0);
+            console.log(
+                "amount0 - refund0 + amount1",
+                amount0 - refund0 + amount1
+            );
+            console.log("amount0 - refund0", amount0 - refund0);
             TransferHelper.safeTransfer(pool.token0, msg.sender, refund0);
         }
 
@@ -232,6 +242,7 @@ contract SupplyUni is IERC721Receiver, Ownable {
                 0
             );
             uint256 refund1 = amm1 - amount1;
+            console.log("refund1", refund1);
             TransferHelper.safeTransfer(pool.token1, msg.sender, refund1);
         }
 
@@ -430,7 +441,7 @@ contract SupplyUni is IERC721Receiver, Ownable {
         PositionAction action
     ) internal {
         if (action == PositionAction.MINT) {
-            UserDeposit memory deposit = UserDeposit({
+            OwnerDeposit memory deposit = OwnerDeposit({
                 tokenId: tokenId,
                 liquidity: liquidity,
                 amount0: amount0,
@@ -489,15 +500,16 @@ contract SupplyUni is IERC721Receiver, Ownable {
 
     /* view functions */
 
-    /// @notice if a user has an active position in a pool, it will return the tokenId of this position
+    /// @notice if a owner has an active position in a pool, it will return the info of this
     /// @param owner The address of the position owner
     /// @param poolId The id of the pool
-    function getOwnerTokenId(address owner, uint256 poolId)
+    /// @return deposit The info of the owner deposit in the pool (OwnerDeposit)
+    function getOwnerInfo(address owner, uint256 poolId)
         external
         view
-        returns (uint256)
+        returns (OwnerDeposit memory deposit)
     {
-        return deposits[owner][poolId].tokenId;
+        return deposits[owner][poolId];
     }
 
     /// @param poolId the id of the pool
