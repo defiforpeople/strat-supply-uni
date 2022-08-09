@@ -26,7 +26,7 @@ if (network.name !== ("hardhat" || "localhost")) {
     let daiAmount: BigNumber;
     let usdcAmount: BigNumber;
     let supplyUni: SupplyUni;
-    let lastId: BigNumber;
+    let poolIdZero: BigNumber;
     let positionManager: string;
 
     beforeEach(async () => {
@@ -45,7 +45,7 @@ if (network.name !== ("hardhat" || "localhost")) {
       const tx = await supplyUni.addPool(dai.address, usdc.address, poolFee);
       await tx.wait();
 
-      lastId = (await supplyUni.poolCount()).sub(1);
+      poolIdZero = (await supplyUni.poolCount()).sub(1);
       positionManager = await supplyUni.nonfungiblePositionManager();
 
       const whale = await ethers.getImpersonatedSigner(WHALE);
@@ -85,11 +85,29 @@ if (network.name !== ("hardhat" || "localhost")) {
           token1,
           poolFee: poolFeeContract,
           isActive,
-        } = await supplyUni.getPool(BigNumber.from(lastId));
+        } = await supplyUni.getPool(BigNumber.from(poolIdZero));
 
         expect(token0).to.eq(dai.address);
         expect(token1).to.eq(usdc.address);
         expect(poolFeeContract).to.eq(poolFee);
+        expect(isActive).to.be.true;
+      });
+
+      it("Should add another pool correctly", async () => {
+        const poolFeeOne = BigNumber.from("500");
+        const poolIdOne = poolIdZero.add(1);
+
+        await supplyUni.addPool(dai.address, usdc.address, poolFeeOne);
+        const {
+          token0,
+          token1,
+          poolFee: poolFeeContract,
+          isActive,
+        } = await supplyUni.getPool(poolIdOne);
+
+        expect(token0).to.eq(dai.address);
+        expect(token1).to.eq(usdc.address);
+        expect(poolFeeContract).to.eq(poolFeeOne);
         expect(isActive).to.be.true;
       });
     });
@@ -110,7 +128,7 @@ if (network.name !== ("hardhat" || "localhost")) {
 
         logger.info("Supplying...");
         const tx = await supplyUni.mintNewPosition(
-          lastId,
+          poolIdZero,
           daiAmount,
           usdcAmount
         );
@@ -118,7 +136,7 @@ if (network.name !== ("hardhat" || "localhost")) {
         logger.info("Supplied");
 
         const { tokenId, liquidity, amount0, amount1 } =
-          await supplyUni.getOwnerInfo(owner.address, lastId);
+          await supplyUni.getOwnerInfo(owner.address, poolIdZero);
 
         logger.info(`tokenId ${tokenId}`);
         logger.info(`liquidity ${liquidity}`);
@@ -155,7 +173,7 @@ if (network.name !== ("hardhat" || "localhost")) {
 
         logger.info("Supplying...");
         const tx = await supplyUni.mintNewPosition(
-          lastId,
+          poolIdZero,
           daiAmount,
           usdcAmount
         );
@@ -169,7 +187,7 @@ if (network.name !== ("hardhat" || "localhost")) {
 
         const { amount0, amount1 } = await supplyUni.getOwnerInfo(
           owner.address,
-          lastId
+          poolIdZero
         );
 
         logger.info(`amount0 ${amount0}`);
@@ -198,13 +216,16 @@ if (network.name !== ("hardhat" || "localhost")) {
 
         logger.info("Supplying...");
         const tx = await supplyUni.mintNewPosition(
-          lastId,
+          poolIdZero,
           daiAmount,
           usdcAmount
         );
         logger.info("Supplied");
 
-        const { tokenId } = await supplyUni.getOwnerInfo(owner.address, lastId);
+        const { tokenId } = await supplyUni.getOwnerInfo(
+          owner.address,
+          poolIdZero
+        );
 
         // Events are not working correctly
         expect(tx)
