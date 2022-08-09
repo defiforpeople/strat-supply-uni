@@ -112,12 +112,13 @@ contract SupplyUni is IERC721Receiver, Ownable {
 
         // assert pool does not exist
         for (uint256 poolId = 0; poolId < poolCount; poolId++) {
-            require(
+            if (
                 pools[poolId].token0 != token0 &&
-                    pools[poolId].token1 != token1 &&
-                    pools[poolId].poolFee != poolFee,
-                "Pool already exists"
-            );
+                pools[poolId].token1 != token1 &&
+                pools[poolId].poolFee != poolFee
+            ) {
+                revert("Pool already exists");
+            }
         }
 
         // creates pool in mapping
