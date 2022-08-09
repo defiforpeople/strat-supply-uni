@@ -59,8 +59,7 @@ const config: HardhatUserConfig = {
       loggingEnabled: false,
       forking: {
         enabled: true,
-        url: "https://eth-mainnet.alchemyapi.io/v2/vtqCl_WPHwVu683HSlNFlL36pTaaWIJw",
-        // url: "https://mainnet.infura.io/v3/bb2d1fa601ab406195e920f99f30fcfe",
+        url: process.env.URL || "",
       },
     },
   },

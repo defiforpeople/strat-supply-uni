@@ -95,7 +95,7 @@ if (network.name !== ("hardhat" || "localhost")) {
     });
 
     describe("mintNewPosition", () => {
-      it.only("should save correctly the state of the sender deposit in the contract", async () => {
+      it("should save correctly the state of the sender deposit in the contract", async () => {
         const zero = BigNumber.from(0);
         logger.info("Transferring...");
         await dai.approve(supplyUni.address, daiAmount);
