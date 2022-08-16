@@ -200,21 +200,13 @@ contract SupplyUni is IERC721Receiver, Ownable {
                 tickUpper: TickMath.MAX_TICK,
                 amount0Desired: amm0,
                 amount1Desired: amm1,
-                amount0Min: _slippageCalc(amm0),
-                amount1Min: _slippageCalc(amm1),
+                amount0Min: 0,
+                amount1Min: 0,
                 recipient: address(this),
                 deadline: block.timestamp
             });
         (tokenId, liquidity, amount0, amount1) = nonfungiblePositionManager
             .mint(params);
-
-        console.log("amount0            ", amount0);
-        console.log("amount1            ", amount1);
-        console.log(
-            "amount0 + amount1  ",
-            amount0 + amount1 - uint256(pool.poolFee)
-        );
-        console.log("liquidity          ", liquidity);
 
         // Create a deposit
         _saveDeposit(
@@ -234,12 +226,6 @@ contract SupplyUni is IERC721Receiver, Ownable {
                 0
             );
             uint256 refund0 = amm0 - amount0;
-            console.log("refund0", refund0);
-            console.log(
-                "amount0 - refund0 + amount1",
-                amount0 - refund0 + amount1
-            );
-            console.log("amount0 - refund0", amount0 - refund0);
             TransferHelper.safeTransfer(pool.token0, msg.sender, refund0);
         }
 
@@ -250,7 +236,6 @@ contract SupplyUni is IERC721Receiver, Ownable {
                 0
             );
             uint256 refund1 = amm1 - amount1;
-            console.log("refund1", refund1);
             TransferHelper.safeTransfer(pool.token1, msg.sender, refund1);
         }
 
@@ -269,7 +254,6 @@ contract SupplyUni is IERC721Receiver, Ownable {
         senderIdExists(poolId)
         returns (uint256 amount0, uint256 amount1)
     {
-        console.log("collectAllFees");
         _tokenId = deposits[msg.sender][poolId].tokenId;
 
         // set amount0Max and amount1Max to uint256.max in params to collect all fees
@@ -283,8 +267,6 @@ contract SupplyUni is IERC721Receiver, Ownable {
 
         // collect fees
         (amount0, amount1) = nonfungiblePositionManager.collect(params);
-        console.log("amount0", amount0);
-        console.log("amount1", amount1);
     }
 
     /// @notice Increases liquidity in the current range
@@ -312,7 +294,6 @@ contract SupplyUni is IERC721Receiver, Ownable {
             "The position isn't initialized"
         );
 
-        console.log("Increase Position function");
         // get pool and tokenId of the sender
         Pool memory pool = pools[poolId];
         _tokenId = deposits[msg.sender][poolId].tokenId;
@@ -330,7 +311,6 @@ contract SupplyUni is IERC721Receiver, Ownable {
             address(this),
             amountAdd1
         );
-        console.log("transferred!");
 
         // approve the position manager
         TransferHelper.safeApprove(
@@ -343,7 +323,6 @@ contract SupplyUni is IERC721Receiver, Ownable {
             address(nonfungiblePositionManager),
             amountAdd1
         );
-        console.log("Approved");
 
         // set params
         INonfungiblePositionManager.IncreaseLiquidityParams
@@ -352,11 +331,10 @@ contract SupplyUni is IERC721Receiver, Ownable {
                     tokenId: _tokenId,
                     amount0Desired: amountAdd0,
                     amount1Desired: amountAdd1,
-                    amount0Min: _slippageCalc(amountAdd0),
-                    amount1Min: _slippageCalc(amountAdd1),
+                    amount0Min: 0,
+                    amount1Min: 0,
                     deadline: block.timestamp
                 });
-        console.log("Increasing");
         /// increase liquidity
         (liquidity, amount0, amount1) = nonfungiblePositionManager
             .increaseLiquidity(params);
@@ -386,7 +364,6 @@ contract SupplyUni is IERC721Receiver, Ownable {
         senderIdExists(poolId)
         returns (uint256 amount0, uint256 amount1)
     {
-        console.log("------------------------");
         require(
             deposits[msg.sender][poolId].initialized,
             "The position isn't initialized"
@@ -402,12 +379,8 @@ contract SupplyUni is IERC721Receiver, Ownable {
         uint128 totalLiquidity = deposits[msg.sender][poolId].liquidity;
         require(totalLiquidity > 0, "There is not liquidity");
 
-        console.log("decrease position");
         // calculate the amount based on the percentage
         uint128 liquidity = (percentageAmm * totalLiquidity) / 100;
-
-        console.log("total liquidity      ", liquidity);
-        console.log("liquidity ot withdraw", liquidity);
 
         // amount0Min and amount1Min are price slippage checks
         // if the amount received after burning is not greater than these minimums, transaction will fail
@@ -416,43 +389,16 @@ contract SupplyUni is IERC721Receiver, Ownable {
                 .DecreaseLiquidityParams({
                     tokenId: _tokenId,
                     liquidity: liquidity,
-                    amount0Min: _slippageCalc(
-                        (percentageAmm * deposits[msg.sender][poolId].amount0) /
-                            100
-                    ),
-                    amount1Min: _slippageCalc(
-                        (percentageAmm * deposits[msg.sender][poolId].amount1) /
-                            100
-                    ),
+                    amount0Min: 0,
+                    amount1Min: 0,
                     deadline: block.timestamp
                 });
-
-        console.log(
-            "token1 contract balance before",
-            IERC20(pools[poolId].token0).balanceOf(address(this))
-        );
-        console.log(
-            "token1 contract balance before",
-            IERC20(pools[poolId].token1).balanceOf(address(this))
-        );
 
         // decrease position
         (amount0, amount1) = nonfungiblePositionManager.decreaseLiquidity(
             params
         );
 
-        console.log(
-            "token1 contract balance after",
-            IERC20(pools[poolId].token0).balanceOf(address(this))
-        );
-        console.log(
-            "token1 contract balance after",
-            IERC20(pools[poolId].token1).balanceOf(address(this))
-        );
-
-        console.log("amount0", amount0);
-        console.log("amount1", amount1);
-        console.log("amount0 + amount1 but in uint256", amount0 + amount1);
         // update the deposit mapping
         uint256 decreasedLiquidity = amount0 + amount1;
         _saveDeposit(
@@ -464,13 +410,10 @@ contract SupplyUni is IERC721Receiver, Ownable {
             PositionAction.DECREASE
         );
 
-        console.log("decreasedLiquidity", decreasedLiquidity);
-        console.log("totalLiquidity", totalLiquidity);
         uint256 remainingLiquidity;
         (, remainingLiquidity) = uint256(totalLiquidity).trySub(
             decreasedLiquidity
         );
-        console.log("Remaining liquidity", remainingLiquidity);
 
         //send liquidity back to owner
         // TODO(nb): check if this way to collect is correct
@@ -527,7 +470,6 @@ contract SupplyUni is IERC721Receiver, Ownable {
         uint256 amount1,
         uint128 liquidity
     ) internal {
-        console.log("sendToOwner");
         address token0 = pools[poolId].token0;
         address token1 = pools[poolId].token1;
 
