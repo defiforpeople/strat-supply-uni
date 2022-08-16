@@ -35,26 +35,20 @@ const DEFAULT_COMPILER_SETTINGS = {
   },
 };
 
+const networkConfig = {
+  url: process.env.URL || "",
+  accounts:
+    process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
+};
+
 const config: HardhatUserConfig = {
   solidity: {
     compilers: [DEFAULT_COMPILER_SETTINGS],
   },
   networks: {
-    polygon: {
-      url: process.env.URL || "",
-      accounts:
-        process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
-    },
-    mumbai: {
-      url: process.env.URL || "",
-      accounts:
-        process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
-    },
-    rinkeby: {
-      url: process.env.URL || "",
-      accounts:
-        process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
-    },
+    polygon: networkConfig,
+    mumbai: networkConfig,
+    rinkeby: networkConfig,
     hardhat: {
       loggingEnabled: false,
       forking: {
@@ -63,9 +57,9 @@ const config: HardhatUserConfig = {
       },
     },
   },
-  // mocha: {
-  //   timeout: 100000000,
-  // },
+  mocha: {
+    timeout: 100000000,
+  },
 };
 
 export default config;
