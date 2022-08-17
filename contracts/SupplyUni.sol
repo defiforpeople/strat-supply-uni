@@ -16,8 +16,27 @@ contract SupplyUni is IERC721Receiver, Ownable {
     using SafeMath for uint256;
 
     // events
-    event Deposit(address indexed sender, uint256 tokenId);
-    event Withdraw(address indexed sender, uint256 tokenId);
+    event Deposit(
+        address indexed sender,
+        uint256 poolId,
+        address token0,
+        address token1,
+        uint256 amount0,
+        uint256 amount1,
+        uint24 poolFee,
+        PositionAction action
+    );
+    event Withdraw(
+        address indexed sender,
+        uint256 poolId,
+        address token0,
+        address token1,
+        uint256 amount0,
+        uint256 amount1,
+        uint24 poolFee,
+        PositionAction action
+    );
+    event Delete(address indexed sender, uint256 poolId);
 
     // constants
     uint256 public constant MAX_SLIPPAGE = 1; // 1%
@@ -239,7 +258,16 @@ contract SupplyUni is IERC721Receiver, Ownable {
             TransferHelper.safeTransfer(pool.token1, msg.sender, refund1);
         }
 
-        emit Deposit(msg.sender, tokenId);
+        emit Deposit(
+            msg.sender,
+            poolId,
+            pool.token0,
+            pool.token1,
+            amount0,
+            amount1,
+            pool.poolFee,
+            PositionAction.MINT
+        );
     }
 
     /// @notice Collects the fees associated with provided liquidity
@@ -349,7 +377,16 @@ contract SupplyUni is IERC721Receiver, Ownable {
             PositionAction.INCREASE
         );
 
-        emit Deposit(msg.sender, _tokenId);
+        emit Deposit(
+            msg.sender,
+            poolId,
+            pool.token0,
+            pool.token1,
+            amount0,
+            amount1,
+            pool.poolFee,
+            PositionAction.INCREASE
+        );
     }
 
     /// @notice A function that decreases the current liquidity given a percentage
@@ -420,7 +457,18 @@ contract SupplyUni is IERC721Receiver, Ownable {
         collectAllFees(poolId);
         _sendToOwner(_tokenId, amount0, amount1, uint128(remainingLiquidity));
 
-        emit Withdraw(msg.sender, _tokenId);
+        Pool memory pool = pools[poolId];
+
+        emit Withdraw(
+            msg.sender,
+            poolId,
+            pool.token0,
+            pool.token1,
+            amount0,
+            amount1,
+            pool.poolFee,
+            PositionAction.DECREASE
+        );
     }
 
     /// @notice function for create and uodate the deposit state on 'deposits' mapping
@@ -439,6 +487,7 @@ contract SupplyUni is IERC721Receiver, Ownable {
         uint256 amount1,
         PositionAction action
     ) internal {
+        // for save a new position
         if (action == PositionAction.MINT) {
             OwnerDeposit memory deposit = OwnerDeposit({
                 tokenId: tokenId,
@@ -449,15 +498,21 @@ contract SupplyUni is IERC721Receiver, Ownable {
             });
 
             deposits[msg.sender][poolId] = deposit;
-        } else if (action == PositionAction.INCREASE) {
+            return;
+        }
+
+        // for save an increase in position
+        if (action == PositionAction.INCREASE) {
             deposits[msg.sender][poolId].liquidity += liquidity;
             deposits[msg.sender][poolId].amount0 += amount0;
             deposits[msg.sender][poolId].amount1 += amount1;
-        } else if (action == PositionAction.DECREASE) {
-            deposits[msg.sender][poolId].liquidity -= liquidity;
-            deposits[msg.sender][poolId].amount0 -= amount0;
-            deposits[msg.sender][poolId].amount1 -= amount1;
+            return;
         }
+
+        // For save a decrease in position
+        deposits[msg.sender][poolId].liquidity -= liquidity;
+        deposits[msg.sender][poolId].amount0 -= amount0;
+        deposits[msg.sender][poolId].amount1 -= amount1;
     }
 
     /// @notice Transfers funds to owner of NFT
@@ -477,6 +532,7 @@ contract SupplyUni is IERC721Receiver, Ownable {
         TransferHelper.safeTransfer(token0, msg.sender, amount0);
         TransferHelper.safeTransfer(token1, msg.sender, amount1);
 
+        // TODO(nb): check if the position is removed from Uni when liquidity is 0
         if (liquidity == 0) {
             delete deposits[msg.sender][poolId];
         }
@@ -495,6 +551,8 @@ contract SupplyUni is IERC721Receiver, Ownable {
         );
         //remove information related to tokenId
         delete deposits[msg.sender][poolId];
+
+        emit Delete(msg.sender, poolId);
     }
 
     /* view functions */
