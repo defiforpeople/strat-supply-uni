@@ -1,43 +1,68 @@
-import { BigNumber } from "ethers";
+import { BigNumber, ContractTransaction } from "ethers";
 import { ethers } from "hardhat";
 const logger = require("pino")();
 
 const { CONTRACT_ADDRESS } = process.env;
+const GAS_LIMIT = BigNumber.from("2074040");
+let tx: ContractTransaction;
 
 export default async function decreaseLoop(
-  userAddr: string,
-  userliquidity: BigNumber,
   poolId: BigNumber,
+  userAddr: string,
+  liquidityRemaining: BigNumber,
+  liquidityNeeded: BigNumber,
   maxSlip: BigNumber,
-  contractAddr?: string
-): Promise<BigNumber> {
-  const zero = BigNumber.from(0);
+  contractAddr?: string // for unit tests in local
+): Promise<ContractTransaction> {
   const strategyAddr = CONTRACT_ADDRESS ? CONTRACT_ADDRESS : contractAddr;
   const supplyUni = await ethers.getContractAt("SupplyUni", `${strategyAddr}`);
-  const user = await ethers.getSigner(userAddr);
   logger.info(`strat addr: ${supplyUni.address}`);
+
+  const user = await ethers.getSigner(userAddr);
   logger.info(`userAddr: ${user.address}`);
 
+  logger.info(`liquidity remaining: ${liquidityRemaining}`);
+  logger.info(`liquidity needed   : ${liquidityNeeded}`);
+
+  let liquidity = liquidityRemaining;
+  let neededLiq = liquidityNeeded.sub(liquidity);
   let count = 0;
-  let liquidity = userliquidity;
-  while (liquidity.gt(zero)) {
+  while (liquidity.lt(liquidityNeeded) && liquidity.gt(GAS_LIMIT)) {
+    // for accounting the tx needed
     count += 1;
     logger.info(`count: ${count}`);
+
+    // get the percentage to decrease by the dif between the liquidity
+    // in Uniswap and the liquidity that is needed
+    let percentageNeeded = neededLiq.mul(BigNumber.from(100)).div(neededLiq);
+
+    percentageNeeded = percentageNeeded.add(1).lt(100)
+      ? percentageNeeded.add(1)
+      : BigNumber.from(100);
+    logger.info(`percentageNeeded: ${percentageNeeded}`);
+
+    const liqBefore = liquidity;
     // decrease position
+    const gas = { gasLimit: GAS_LIMIT };
     logger.info("Decreasing position...");
-    let tx = await supplyUni
+    tx = await supplyUni
       .connect(user)
-      .decreasePosition(poolId, 100, maxSlip);
+      .decreasePosition(poolId, percentageNeeded, maxSlip, gas);
     await tx.wait();
     logger.info("Position decreased!");
 
-    const { liquidity: userliquidity } = await supplyUni.getOwnerInfo(
+    // get againg the liquidity for the loop to continue or not
+    const { liquidity: liqUserAfter } = await supplyUni.getOwnerInfo(
       userAddr,
       poolId
     );
-    liquidity = userliquidity;
+    logger.info(`liqUserAfter: ${liqUserAfter}`);
+
+    liquidity = liqUserAfter;
+    neededLiq = neededLiq.sub(liqBefore.sub(liqUserAfter));
   }
 
-  logger.info(`liquidity ${liquidity}`);
-  return liquidity;
+  logger.info(`liquidity: ${liquidity}`);
+  logger.info(`neededLiq: ${neededLiq}`);
+  return tx;
 }
