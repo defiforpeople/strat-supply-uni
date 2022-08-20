@@ -1,17 +1,26 @@
-import { SupplyUni, IERC20 } from "../../typechain-types";
 import { expect, use } from "chai";
 import "@nomiclabs/hardhat-ethers";
 import { ethers, network } from "hardhat";
 import { waffleChai } from "@ethereum-waffle/chai";
-import { BigNumber } from "ethers";
+import { BigNumber, ContractTransaction } from "ethers";
 import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
+import {
+  SupplyUni,
+  IERC20,
+  INonfungiblePositionManager,
+} from "../../typechain-types";
+import addPool from "../../scripts/addPool";
+import decreaseLoop from "../../utils/decreaseLoop";
+import increasePosition from "../../scripts/increasePosition";
+import decreasePosition from "../../scripts/decreasePosition";
+import mintNewPosition from "../../scripts/mintNewPosition";
 const logger = require("pino")();
 use(waffleChai);
 
 const DAI = "0x6B175474E89094C44Da98b954EedeAC495271d0F";
 const USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 const WHALE = "0x2FAF487A4414Fe77e2327F0bf4AE2a264a776AD2"; //FTX Whale
-const GAS_LIMIT = 2074040;
+const GAS_LIMIT = BigNumber.from(2074040);
 
 if (network.name !== ("hardhat" || "localhost")) {
   describe.skip;
@@ -26,56 +35,241 @@ if (network.name !== ("hardhat" || "localhost")) {
     let daiAmount: BigNumber;
     let usdcAmount: BigNumber;
     let supplyUni: SupplyUni;
-    let poolIdZero: BigNumber;
-    let positionManager: string;
+    let lastPoolId: BigNumber;
+    let manager: INonfungiblePositionManager;
+    let managerAddr: string;
+    let daiOwnerStartBalance: BigNumber;
+    let usdcOwnerStartBalance: BigNumber;
+    let zero: BigNumber;
+    let maxSlip: BigNumber;
+    let gas: { gasLimit: BigNumber };
 
     beforeEach(async () => {
+      // get owner
       [owner, user] = await ethers.getSigners();
 
       // deploy SupplyUni
       const liquExamplesFactory = await ethers.getContractFactory("SupplyUni");
       supplyUni = (await liquExamplesFactory.deploy()) as SupplyUni;
       await supplyUni.deployed();
+      logger.info(`SupplyUni address: ${supplyUni.address}`);
+      process.env["CONTRACT_ADDRESS"] = supplyUni.address;
 
       // add a pool to SupplyUni (DAI/USDC 0.01%)
       dai = await ethers.getContractAt("IERC20", DAI);
       usdc = await ethers.getContractAt("IERC20", USDC);
       poolFee = BigNumber.from("100");
 
+      // Add the first pool
       const tx = await supplyUni.addPool(dai.address, usdc.address, poolFee);
       await tx.wait();
 
-      poolIdZero = (await supplyUni.poolCount()).sub(1);
-      positionManager = await supplyUni.nonfungiblePositionManager();
+      // Id of the last pool added
+      lastPoolId = (await supplyUni.poolCount()).sub(1);
 
+      // Uniswap V3 liquidity manager contract
+      managerAddr = await supplyUni.nonfungiblePositionManager();
+      manager = await ethers.getContractAt(
+        "INonfungiblePositionManager",
+        managerAddr
+      );
+
+      // get owner gas balance
+      const ownerBalanceBefore = await ethers.provider.getBalance(
+        owner.address
+      );
+
+      // get and impersonated whale
       const whale = await ethers.getImpersonatedSigner(WHALE);
       const whaleDaiBalance = await dai.balanceOf(whale.address);
       const whaleUsdcBalance = await usdc.balanceOf(whale.address);
 
-      const ownerBalanceBefore = await ethers.provider.getBalance(
-        owner.address
-      );
-      logger.info(`owner balance before: ${ownerBalanceBefore}`);
-
+      // set amounts to transfer and assert whale has enough
       daiAmount = BigNumber.from(1000n * 10n ** 18n);
       usdcAmount = BigNumber.from(1000n * 10n ** 6n);
+      expect(whaleDaiBalance).to.gte(daiAmount.mul(2));
+      expect(whaleUsdcBalance).to.gte(usdcAmount.mul(2));
 
-      expect(whaleDaiBalance).to.gte(daiAmount);
-      expect(whaleUsdcBalance).to.gte(usdcAmount);
-
+      // send enough gas to the whale for then transferring the tokens amounts
       await owner.sendTransaction({
         to: whale.address,
         value: ownerBalanceBefore.div(2),
         gasLimit: GAS_LIMIT,
       });
 
+      // transfer the tokens amounts from the whale to our address
       await dai.connect(whale).transfer(owner.address, daiAmount);
       await usdc.connect(whale).transfer(owner.address, usdcAmount);
+      // and to the user address
+      await dai.connect(whale).transfer(user.address, daiAmount);
+      await usdc.connect(whale).transfer(user.address, usdcAmount);
 
-      // const daiOwnerBalance = await dai.balanceOf(owner.address);
-      // const usdcOwnerBalance = await usdc.balanceOf(owner.address);
-      // logger.info(`dai owner balance before: ${daiOwnerBalance}`);
-      // logger.info(`usdc owner balance before: ${usdcOwnerBalance}`);
+      // set the max slippage
+      maxSlip = BigNumber.from(100); // 1%
+
+      // set gas object
+      gas = { gasLimit: GAS_LIMIT };
+
+      // add zero variable
+      zero = BigNumber.from(0);
+
+      daiOwnerStartBalance = await dai.balanceOf(owner.address);
+      usdcOwnerStartBalance = await usdc.balanceOf(owner.address);
+
+      logger.info(`owner dai balance when starting: ${daiOwnerStartBalance}`);
+      logger.info(`owner usdc balance when starting: ${usdcOwnerStartBalance}`);
+    });
+
+    describe("test all the functions with a single user", () => {
+      it("should do all with 1 signer", async () => {
+        const zero = BigNumber.from(0);
+        let tx: ContractTransaction;
+
+        logger.info(
+          `useer gas balance: ${await ethers.provider.getBalance(user.address)}`
+        );
+
+        // Uniswap V3 liquidity manager contract
+        const managerAddr = await supplyUni.nonfungiblePositionManager();
+        const manager = await ethers.getContractAt(
+          "INonfungiblePositionManager",
+          managerAddr
+        );
+
+        const daiOwnerBalanceStart = await dai.balanceOf(owner.address);
+        const usdcOwnerBalanceStart = await usdc.balanceOf(owner.address);
+
+        let { tokenId: ownerMintId } = await supplyUni.getOwnerInfo(
+          owner.address,
+          lastPoolId
+        );
+
+        // if there is no position yet, mint it
+        if (ownerMintId.eq(zero)) {
+          // mint new position owner
+          logger.info("Minting new position owner...");
+          tx = await mintNewPosition(
+            lastPoolId,
+            owner.address,
+            dai.address,
+            usdc.address,
+            daiAmount.div(10),
+            usdcAmount.div(10),
+            maxSlip
+          );
+        }
+
+        logger.info(`owner tokenId: ${ownerMintId}`);
+
+        const daiAfterMint = await dai.balanceOf(owner.address);
+        const usdcAfterMint = await usdc.balanceOf(owner.address);
+
+        const daiOwnerIncrease = BigNumber.from(10n * 10n ** 18n);
+        const usdcOwnerIncrease = BigNumber.from(10n * 10n ** 6n);
+
+        expect(daiAfterMint).to.be.gte(daiOwnerIncrease);
+        expect(usdcAfterMint).to.be.gte(usdcOwnerIncrease);
+
+        logger.info(`increasing position owner...`);
+        tx = await increasePosition(
+          lastPoolId,
+          owner.address,
+          dai.address,
+          usdc.address,
+          daiOwnerIncrease,
+          usdcOwnerIncrease,
+          maxSlip
+        );
+
+        let daiStratBalance = await dai.balanceOf(supplyUni.address);
+        let usdcStratBalance = await usdc.balanceOf(supplyUni.address);
+        expect(daiStratBalance).to.be.equal(zero);
+        expect(usdcStratBalance).to.be.equal(zero);
+
+        // decrease owner
+        const decrOwnerPerc = BigNumber.from(100);
+        logger.info("Decreasing position owner...");
+        tx = await decreasePosition(
+          lastPoolId,
+          owner.address,
+          decrOwnerPerc,
+          maxSlip
+        );
+
+        logger.info("Retrieving NFT...");
+        tx = await supplyUni.connect(owner).retrieveNFT(lastPoolId, gas);
+        logger.info("Retrieved NFT!");
+
+        daiStratBalance = await usdc.balanceOf(supplyUni.address);
+        usdcStratBalance = await usdc.balanceOf(supplyUni.address);
+        expect(daiStratBalance).to.be.equal(zero);
+        expect(usdcStratBalance).to.be.equal(zero);
+        logger.info("Done");
+      });
+
+      describe("decrease", () => {
+        it.only("should withdraw and make the loop correctly if necessary", async () => {
+          const zero = BigNumber.from(0);
+          let tx: ContractTransaction;
+
+          const daiOwnerBalanceStart = await dai.balanceOf(owner.address);
+          const usdcOwnerBalanceStart = await usdc.balanceOf(owner.address);
+
+          let { tokenId: ownerMintId } = await supplyUni.getOwnerInfo(
+            owner.address,
+            lastPoolId
+          );
+
+          // if there is no position yet, mint it
+          if (ownerMintId.eq(zero)) {
+            // mint new position owner
+            logger.info("Minting new position owner...");
+            tx = await mintNewPosition(
+              lastPoolId,
+              owner.address,
+              dai.address,
+              usdc.address,
+              daiAmount.div(10),
+              usdcAmount.div(10),
+              maxSlip
+            );
+            const { tokenId } = await supplyUni.getOwnerInfo(
+              owner.address,
+              lastPoolId
+            );
+            ownerMintId = tokenId;
+          }
+
+          logger.info(`owner tokenId: ${ownerMintId}`);
+
+          const daiAfterMint = await dai.balanceOf(owner.address);
+          const usdcAfterMint = await usdc.balanceOf(owner.address);
+
+          let daiStratBalance = await dai.balanceOf(supplyUni.address);
+          let usdcStratBalance = await usdc.balanceOf(supplyUni.address);
+          expect(daiStratBalance).to.be.equal(zero);
+          expect(usdcStratBalance).to.be.equal(zero);
+
+          const positions = await manager.positions(ownerMintId);
+          logger.info(`positions: ${positions}`);
+
+          // decrease owner
+          const decrOwnerPerc = BigNumber.from(100);
+          logger.info("Decreasing position owner...");
+          tx = await decreasePosition(
+            lastPoolId,
+            owner.address,
+            decrOwnerPerc,
+            maxSlip
+          );
+
+          daiStratBalance = await usdc.balanceOf(supplyUni.address);
+          usdcStratBalance = await usdc.balanceOf(supplyUni.address);
+          expect(daiStratBalance).to.be.equal(zero);
+          expect(usdcStratBalance).to.be.equal(zero);
+          logger.info("Done");
+        });
+      });
     });
 
     describe("addPool", () => {
@@ -85,7 +279,7 @@ if (network.name !== ("hardhat" || "localhost")) {
           token1,
           poolFee: poolFeeContract,
           isActive,
-        } = await supplyUni.getPool(BigNumber.from(poolIdZero));
+        } = await supplyUni.getPool(BigNumber.from(lastPoolId));
 
         expect(token0).to.eq(dai.address);
         expect(token1).to.eq(usdc.address);
@@ -95,7 +289,7 @@ if (network.name !== ("hardhat" || "localhost")) {
 
       it("Should add another pool correctly", async () => {
         const poolFeeOne = BigNumber.from("500");
-        const poolIdOne = poolIdZero.add(1);
+        const poolIdOne = lastPoolId.add(1);
 
         await supplyUni.addPool(dai.address, usdc.address, poolFeeOne);
         const {
@@ -114,11 +308,10 @@ if (network.name !== ("hardhat" || "localhost")) {
 
     describe("mintNewPosition", () => {
       it("should save correctly the state of the sender deposit in the contract", async () => {
-        const zero = BigNumber.from(0);
         logger.info("Approving...");
         await dai.approve(supplyUni.address, daiAmount);
         await usdc.approve(supplyUni.address, usdcAmount);
-        logger.info("Approve!");
+        logger.info("Approved!");
 
         const daiOwnerBalanceBefore = await dai.balanceOf(owner.address);
         const usdcOwnerBalanceBefore = await usdc.balanceOf(owner.address);
@@ -128,32 +321,27 @@ if (network.name !== ("hardhat" || "localhost")) {
 
         logger.info("Supplying...");
         const tx = await supplyUni.mintNewPosition(
-          poolIdZero,
+          lastPoolId,
           daiAmount,
-          usdcAmount
+          usdcAmount,
+          maxSlip
         );
         await tx.wait();
         logger.info("Supplied");
 
-        const { tokenId, liquidity, amount0, amount1 } =
-          await supplyUni.getOwnerInfo(owner.address, poolIdZero);
+        const { tokenId, liquidity } = await supplyUni.getOwnerInfo(
+          owner.address,
+          lastPoolId
+        );
 
         logger.info(`tokenId ${tokenId}`);
         logger.info(`liquidity ${liquidity}`);
-        logger.info(`amount0 ${amount0}`);
-        logger.info(`amount1 ${amount1}`);
 
         const daiOwnerBalanceAfter = await dai.balanceOf(owner.address);
         const usdcOwnerBalanceAfter = await usdc.balanceOf(owner.address);
         // const finalLiq = amount0.add(amount1).sub(poolFee);
 
         expect(tokenId).to.be.gt(zero);
-        expect(amount0).to.be.eq(
-          daiOwnerBalanceBefore.sub(daiOwnerBalanceAfter)
-        );
-        expect(amount1).to.be.eq(
-          usdcOwnerBalanceBefore.sub(usdcOwnerBalanceAfter)
-        );
 
         expect(liquidity).to.be.gt(zero);
         // expect(liquidity).to.be.eq(finalLiq);
@@ -161,161 +349,138 @@ if (network.name !== ("hardhat" || "localhost")) {
         // The result is 999982856505346 while amount0 + amount1 is 999965713305537627532
       });
 
-      it("Should mint a new position correctly, and update the sender balance when suproviding liquidity", async () => {
-        const zero = BigNumber.from(0);
+      it("Should update tokenId and liquidity state and emit Deposit() event after minting a position", async () => {
         logger.info("Approving...");
         await dai.approve(supplyUni.address, daiAmount);
         await usdc.approve(supplyUni.address, usdcAmount);
-        logger.info("Approve!");
-
-        const daiOwnerBalanceBefore = await dai.balanceOf(owner.address);
-        const usdcOwnerBalanceBefore = await usdc.balanceOf(owner.address);
-
-        logger.info(`dai owner balance  before: ${daiOwnerBalanceBefore}`);
-        logger.info(`usdc owner balance before: ${usdcOwnerBalanceBefore}`);
+        logger.info("Approved!");
 
         logger.info("Supplying...");
         const tx = await supplyUni.mintNewPosition(
-          poolIdZero,
+          lastPoolId,
           daiAmount,
-          usdcAmount
-        );
-        await tx.wait();
-        logger.info("Supplied");
-
-        const daiOwnerBalanceAfter = await dai.balanceOf(owner.address);
-        const usdcOwnerBalanceAfter = await usdc.balanceOf(owner.address);
-        logger.info(`dai owner balance  After: ${daiOwnerBalanceAfter}`);
-        logger.info(`usdc owner balance After: ${usdcOwnerBalanceAfter}`);
-
-        const { amount0, amount1 } = await supplyUni.getOwnerInfo(
-          owner.address,
-          poolIdZero
-        );
-
-        logger.info(`amount0 ${amount0}`);
-        logger.info(`amount1 ${amount1}`);
-
-        expect(amount0).to.be.gt(zero);
-        expect(amount1).to.be.gt(zero);
-
-        expect(daiOwnerBalanceAfter).to.be.eq(
-          daiOwnerBalanceBefore.sub(amount0)
-        );
-        expect(usdcOwnerBalanceAfter).to.be.eq(
-          usdcOwnerBalanceBefore.sub(amount1)
-        );
-
-        // doesn't work (the method 'changeTokenBalance' is bad):
-        // expect(tx).to.changeTokenBalance(dai, owner, -amount0);
-        // expect(tx).to.changeTokenBalance(usdc, owner, -amount1);
-      });
-
-      it("Should emit Deposit() event after minting a position", async () => {
-        logger.info("Approving...");
-        await dai.approve(supplyUni.address, daiAmount);
-        await usdc.approve(supplyUni.address, usdcAmount);
-        logger.info("Approve!");
-
-        logger.info("Supplying...");
-        const tx = await supplyUni.mintNewPosition(
-          poolIdZero,
-          daiAmount,
-          usdcAmount
+          usdcAmount,
+          maxSlip
         );
         logger.info("Supplied");
 
-        const { tokenId } = await supplyUni.getOwnerInfo(
+        const { tokenId, liquidity } = await supplyUni.getOwnerInfo(
           owner.address,
-          poolIdZero
+          lastPoolId
         );
 
-        // Events are not working correctly
-        expect(tx)
-          .to.emit(supplyUni, "Deposit")
-          .withArgs(owner.address, tokenId);
+        expect(tokenId).to.be.gt(zero);
+
+        const positionInfo = await manager.positions(tokenId);
+        const liqManager = positionInfo[7];
+
+        expect(liquidity).to.be.eq(liqManager);
+        expect(tx).to.emit(supplyUni, "Deposit");
       });
     });
 
     describe("increasePosition", () => {
       it("should emit an event after increasing liquidity", async () => {
-        const zero = BigNumber.from(0);
         logger.info("Approving...");
-        await dai.approve(supplyUni.address, daiAmount);
-        await usdc.approve(supplyUni.address, usdcAmount);
-        logger.info("Approve!");
+        await dai.approve(supplyUni.address, daiAmount.div(2));
+        await usdc.approve(supplyUni.address, usdcAmount.div(2));
+        logger.info("Approved!");
 
         logger.info("Supplying...");
         let tx = await supplyUni.mintNewPosition(
-          poolIdZero,
-          daiAmount,
-          usdcAmount
+          lastPoolId,
+          daiAmount.div(2),
+          usdcAmount.div(2),
+          maxSlip
         );
         await tx.wait();
+        logger.info("Supplied");
+        const { tokenId, liquidity: liqBefore } = await supplyUni.getOwnerInfo(
+          owner.address,
+          lastPoolId
+        );
+        logger.info(`liqBefore ${liqBefore}`);
 
-        const daiOwnerBalance = await dai.balanceOf(owner.address);
-        const usdcOwnerBalance = await usdc.balanceOf(owner.address);
+        const daiOwnerBalanceBef = await dai.balanceOf(owner.address);
+        const usdcOwnerBalanceBef = await usdc.balanceOf(owner.address);
+
+        logger.info(`dai owner balance before  : ${daiOwnerBalanceBef}`);
+        logger.info(`usdc owner balance before : ${usdcOwnerBalanceBef}`);
 
         logger.info("Approving...");
-        await dai.approve(supplyUni.address, daiOwnerBalance);
-        await usdc.approve(supplyUni.address, usdcOwnerBalance);
+        await dai.approve(supplyUni.address, daiOwnerBalanceBef);
+        await usdc.approve(supplyUni.address, usdcOwnerBalanceBef);
         logger.info("Approved");
-
-        logger.info(`dai owner balance  : ${daiOwnerBalance}`);
-        logger.info(`usdc owner balance : ${usdcOwnerBalance}`);
 
         logger.info("Increasing position...");
         tx = await supplyUni.increasePosition(
-          poolIdZero,
-          daiOwnerBalance,
-          usdcOwnerBalance
+          lastPoolId,
+          daiOwnerBalanceBef,
+          usdcOwnerBalanceBef,
+          maxSlip
         );
+        await tx.wait();
         logger.info("Position Increased");
 
-        await tx.wait();
+        const positionInfo = await manager.positions(tokenId);
+        const liqAfter = positionInfo[7];
+        logger.info(`liqAfter ${liqAfter}`);
+
+        const daiOwnerBalanceAf = await dai.balanceOf(owner.address);
+        const usdcOwnerBalanceAf = await usdc.balanceOf(owner.address);
+
+        logger.info(`dai owner balance after   : ${daiOwnerBalanceAf}`);
+        logger.info(`usdc owner balance after  : ${usdcOwnerBalanceAf}`);
+
+        const daiStratBalance = await dai.balanceOf(supplyUni.address);
+        const usdcStratBalance = await usdc.balanceOf(supplyUni.address);
+
+        expect(daiStratBalance).to.eq(zero);
+        expect(usdcStratBalance).to.eq(zero);
+        expect(liqAfter).to.be.gt(liqBefore);
+        expect(daiOwnerBalanceAf).to.be.lt(daiOwnerBalanceBef);
+        expect(usdcOwnerBalanceAf).to.be.lt(usdcOwnerBalanceBef);
         expect(tx).to.emit(supplyUni, "Deposit");
       });
     });
 
     describe("decreasePosition", () => {
       it("should emit an event after decreasing liquidity", async () => {
-        const zero = BigNumber.from(0);
         logger.info("Approving...");
         await dai.approve(supplyUni.address, daiAmount);
         await usdc.approve(supplyUni.address, usdcAmount);
-        logger.info("Approve!");
+        logger.info("Approved!");
 
         logger.info("Supplying...");
         let tx = await supplyUni.mintNewPosition(
-          poolIdZero,
+          lastPoolId,
           daiAmount,
-          usdcAmount
+          usdcAmount,
+          maxSlip
         );
         await tx.wait();
         logger.info("Supplied!");
 
-        const daiOwnerBalance = await dai.balanceOf(owner.address);
-        const usdcOwnerBalance = await usdc.balanceOf(owner.address);
+        const daiOwnerBalanceBef = await dai.balanceOf(owner.address);
+        const usdcOwnerBalanceBef = await usdc.balanceOf(owner.address);
 
-        logger.info(`dai owner balance  before: ${daiOwnerBalance}`);
-        logger.info(`usdc owner balance before: ${usdcOwnerBalance}`);
-
-        const daiContractBef = await dai.balanceOf(supplyUni.address);
-        const usdcContractBef = await usdc.balanceOf(supplyUni.address);
-
-        logger.info(`dai contract balance  before: ${daiContractBef}`);
-        logger.info(`usdc contract balance before: ${usdcContractBef}`);
+        logger.info(`dai owner balance  before: ${daiOwnerBalanceBef}`);
+        logger.info(`usdc owner balance before: ${usdcOwnerBalanceBef}`);
 
         logger.info("Decreasing position...");
-        tx = await supplyUni.decreasePosition(poolIdZero, 100);
+        tx = await supplyUni.decreasePosition(lastPoolId, 100, maxSlip);
         await tx.wait();
         logger.info("Position decreased");
 
-        const daiContractAfter = await dai.balanceOf(supplyUni.address);
-        const usdcContractAfter = await usdc.balanceOf(supplyUni.address);
+        const { liquidity } = await supplyUni.getOwnerInfo(
+          owner.address,
+          lastPoolId
+        );
+        const daiContractAf = await dai.balanceOf(supplyUni.address);
+        const usdcContractAf = await usdc.balanceOf(supplyUni.address);
 
-        logger.info(`dai contract balance  after: ${daiContractAfter}`);
-        logger.info(`usdc contract balance after: ${usdcContractAfter}`);
+        logger.info(`dai contract balance  after: ${daiContractAf}`);
+        logger.info(`usdc contract balance after: ${usdcContractAf}`);
 
         const daiOwnerBalanceAfter = await dai.balanceOf(owner.address);
         const usdcOwnerBalanceAfter = await usdc.balanceOf(owner.address);
@@ -323,47 +488,99 @@ if (network.name !== ("hardhat" || "localhost")) {
         logger.info(`dai owner balance  after : ${daiOwnerBalanceAfter}`);
         logger.info(`usdc owner balance after: ${usdcOwnerBalanceAfter}`);
 
-        await tx.wait();
+        const daiStratBalance = await dai.balanceOf(supplyUni.address);
+        const usdcStratBalance = await usdc.balanceOf(supplyUni.address);
+
+        expect(liquidity).to.be.equal(zero);
+        expect(daiStratBalance).to.be.equal(zero);
+        expect(usdcStratBalance).to.be.equal(zero);
+        expect(daiOwnerBalanceAfter).to.be.gt(daiOwnerBalanceBef);
+        expect(usdcOwnerBalanceAfter).to.be.gt(usdcOwnerBalanceBef);
         expect(tx).to.emit(supplyUni, "Withdraw");
+        // These 2 fails for -1 :(
+        /// @dev The amounts reported may not be exactly equivalent to the amounts transferred, due to rounding behavior
+
+        // expect(daiOwnerBalanceAfter).to.be.eq(daiOwnerStartBalance);
+        // expect(usdcOwnerBalanceAfter).to.be.eq(usdcOwnerStartBalance);
       });
     });
 
     describe("collectAllFees", () => {
       it("should collect the fees successfully", async () => {
         logger.info("Approving...");
-        await dai.approve(supplyUni.address, daiAmount);
-        await usdc.approve(supplyUni.address, usdcAmount);
-        logger.info("Approve!");
+        await dai.approve(supplyUni.address, daiAmount.div(2));
+        await usdc.approve(supplyUni.address, usdcAmount.div(2));
+        logger.info("Approved!");
 
         logger.info("Supplying...");
         let tx = await supplyUni.mintNewPosition(
-          poolIdZero,
-          daiAmount,
-          usdcAmount
+          lastPoolId,
+          daiAmount.div(2),
+          usdcAmount.div(2),
+          maxSlip
         );
         await tx.wait();
         logger.info("Supplied!");
 
-        const daiContractBef = await dai.balanceOf(supplyUni.address);
-        const usdcContractBef = await usdc.balanceOf(supplyUni.address);
+        let daiContractBalance = await dai.balanceOf(supplyUni.address);
+        let usdcContractBalance = await usdc.balanceOf(supplyUni.address);
 
-        logger.info(`dai contract balance  before: ${daiContractBef}`);
-        logger.info(`usdc contract balance before: ${usdcContractBef}`);
+        logger.info(`dai contract balance  before: ${daiContractBalance}`);
+        logger.info(`usdc contract balance before: ${usdcContractBalance}`);
 
-        // await network.provider.send("evm_increaseTime", [200]);
-        // // we make real the time increased by mining the block
-        // await network.provider.send("evm_mine", []);
-        // logger.info("Mined!");
-
-        tx = await supplyUni.collectAllFees(poolIdZero);
+        tx = await supplyUni.collectAllFees(lastPoolId);
         await tx.wait();
         logger.info("Collected!");
+
+        daiContractBalance = await dai.balanceOf(supplyUni.address);
+        usdcContractBalance = await usdc.balanceOf(supplyUni.address);
+
+        logger.info(`dai contract balance  after: ${daiContractBalance}`);
+        logger.info(`usdc contract balance after: ${usdcContractBalance}`);
+      });
+
+      // It shouldn't touch the liquidity invested when collecting the fees
+      it("should keep liquidity deposited in the pool after minting a new position and collecting all the fees", async () => {
+        logger.info("Approving...");
+        await dai.approve(supplyUni.address, daiAmount);
+        await usdc.approve(supplyUni.address, usdcAmount);
+        logger.info("Approved!");
+
+        logger.info("Supplying...");
+        let tx = await supplyUni.mintNewPosition(
+          lastPoolId,
+          daiAmount,
+          usdcAmount,
+          maxSlip
+        );
+        await tx.wait();
+        logger.info("Supplied!");
+
+        const { tokenId, liquidity: liquidityBefore } =
+          await supplyUni.getOwnerInfo(owner.address, lastPoolId);
+        logger.info(`liq before ${liquidityBefore}`);
+
+        const daiContractBefore = await dai.balanceOf(supplyUni.address);
+        const usdcContractBefore = await usdc.balanceOf(supplyUni.address);
+
+        logger.info(`dai contract balance  before: ${daiContractBefore}`);
+        logger.info(`usdc contract balance before: ${usdcContractBefore}`);
+
+        logger.info("Collecting fees...");
+        tx = await supplyUni.connect(owner).collectAllFees(lastPoolId);
+        await tx.wait();
 
         const daiContractAfter = await dai.balanceOf(supplyUni.address);
         const usdcContractAfter = await usdc.balanceOf(supplyUni.address);
 
         logger.info(`dai contract balance  after: ${daiContractAfter}`);
         logger.info(`usdc contract balance after: ${usdcContractAfter}`);
+
+        const positionInfoAfter = await manager.positions(tokenId);
+        const liqManagerAfter = positionInfoAfter[7];
+        logger.info(`liq after ${liqManagerAfter}`);
+
+        expect(liqManagerAfter).to.be.equal(liquidityBefore);
       });
     });
 
@@ -372,13 +589,14 @@ if (network.name !== ("hardhat" || "localhost")) {
         logger.info("Approving...");
         await dai.approve(supplyUni.address, daiAmount);
         await usdc.approve(supplyUni.address, usdcAmount);
-        logger.info("Approve!");
+        logger.info("Approved!");
 
         logger.info("Supplying...");
         let tx = await supplyUni.mintNewPosition(
-          poolIdZero,
+          lastPoolId,
           daiAmount,
-          usdcAmount
+          usdcAmount,
+          maxSlip
         );
         await tx.wait();
         logger.info("Supplied!");
@@ -396,34 +614,34 @@ if (network.name !== ("hardhat" || "localhost")) {
         logger.info(`usdc contract balance before: ${usdcContractBef}`);
 
         logger.info("Decreasing position...");
-        tx = await supplyUni.decreasePosition(poolIdZero, 100);
+        tx = await supplyUni.decreasePosition(lastPoolId, 100, maxSlip);
         await tx.wait();
         logger.info("Position decreased");
 
         // providers don't support history calls :(
-        // expect("_sendToOwner").to.be.calledOnContractWith(supplyUni, [poolIdZero]);
+        // expect("_sendToOwner").to.be.calledOnContractWith(supplyUni, [lastPoolId]);
       });
     });
 
     describe("retrieveNFT", () => {
       it("should transfer NFT correctly to the user and update the state", async () => {
-        const zero = BigNumber.from(0);
         logger.info("Approving...");
         await dai.approve(supplyUni.address, daiAmount);
         await usdc.approve(supplyUni.address, usdcAmount);
-        logger.info("Approve!");
+        logger.info("Approved!");
 
         logger.info("Supplying...");
         let tx = await supplyUni.mintNewPosition(
-          poolIdZero,
+          lastPoolId,
           daiAmount,
-          usdcAmount
+          usdcAmount,
+          maxSlip
         );
         await tx.wait();
         logger.info("Supplied!");
 
         logger.info("Retrieving...");
-        tx = await supplyUni.retrieveNFT(poolIdZero);
+        tx = await supplyUni.retrieveNFT(lastPoolId);
         await tx.wait();
         logger.info("Retrieved!");
 
@@ -434,13 +652,132 @@ if (network.name !== ("hardhat" || "localhost")) {
           amount1Owner,
           liquidityOwner,
           initializedOwner,
-        ] = await supplyUni.getOwnerInfo(owner.address, poolIdZero);
+        ] = await supplyUni.getOwnerInfo(owner.address, lastPoolId);
 
         expect(tokenIdOwner).to.be.equal(zero);
         expect(amount0Owner).to.be.equal(zero);
         expect(amount1Owner).to.be.equal(zero);
         expect(liquidityOwner).to.be.equal(zero);
         expect(initializedOwner).to.be.false;
+      });
+    });
+
+    describe("All the functions that updates the amount of the position", () => {
+      it("should use all the functions of the strat contract with the owner", async () => {
+        // mint new position owner
+        logger.info("Approving owner...");
+        await dai.approve(supplyUni.address, daiAmount.div(2));
+        await usdc.approve(supplyUni.address, usdcAmount.div(2));
+        logger.info("Approved owner!");
+
+        logger.info("Supplying owner...");
+        let tx = await supplyUni.mintNewPosition(
+          lastPoolId,
+          daiAmount.div(2),
+          usdcAmount.div(2),
+          maxSlip
+        );
+        await tx.wait();
+        logger.info("Supplied owner!");
+
+        const daiOwnerBalanceBef = await dai.balanceOf(owner.address);
+        const usdcOwnerBalanceBef = await usdc.balanceOf(owner.address);
+
+        logger.info(`dai owner balance  before: ${daiOwnerBalanceBef}`);
+        logger.info(`usdc owner balance before: ${usdcOwnerBalanceBef}`);
+
+        const daiUserBalanceBef = await dai.balanceOf(user.address);
+        const usdcUserBalanceBef = await usdc.balanceOf(user.address);
+
+        logger.info(`dai user balance  before: ${daiUserBalanceBef}`);
+        logger.info(`usdc user balance before: ${usdcUserBalanceBef}`);
+
+        // increase owner
+        const daiAmm = BigNumber.from(10n * 10n ** 18n);
+        const usdcAmm = BigNumber.from(10n * 10n ** 6n);
+        expect(daiOwnerBalanceBef).to.be.gte(daiAmm);
+        expect(usdcOwnerBalanceBef).to.be.gte(usdcAmm);
+
+        logger.info("Approving...");
+        await dai.approve(supplyUni.address, daiAmm);
+        await usdc.approve(supplyUni.address, usdcAmm);
+        logger.info("Approved");
+
+        logger.info("Increasing position...");
+        tx = await supplyUni.increasePosition(
+          lastPoolId,
+          daiAmm,
+          usdcAmm,
+          maxSlip
+        );
+        await tx.wait();
+        logger.info("Position Increased");
+
+        const { liquidity: liqOwnerBef } = await supplyUni.getOwnerInfo(
+          owner.address,
+          lastPoolId
+        );
+        logger.info(`liqOwnerBef ${liqOwnerBef}`);
+
+        // decrease owner
+        logger.info("Decreasing position owner...");
+        tx = await supplyUni.decreasePosition(lastPoolId, 100, maxSlip);
+        await tx.wait();
+        logger.info("Position decreased owner!");
+
+        logger.info("Decreasing position owner...");
+        tx = await supplyUni.decreasePosition(lastPoolId, 100, maxSlip);
+        await tx.wait();
+        logger.info("Position decreased owner!");
+
+        let { liquidity } = await supplyUni.getOwnerInfo(
+          owner.address,
+          lastPoolId
+        );
+
+        let count = 0;
+        while (liquidity.gt(zero)) {
+          count += 1;
+          logger.info(`count ${count}`);
+          // decrease owner
+          logger.info("Decreasing position owner...");
+          tx = await supplyUni.decreasePosition(lastPoolId, 100, maxSlip);
+          await tx.wait();
+          logger.info("Position decreased owner!");
+
+          let liquidity;
+          liquidity = await supplyUni.getOwnerInfo(owner.address, lastPoolId);
+          logger.info("Decreasing position owner...");
+          tx = await supplyUni.decreasePosition(lastPoolId, 100, maxSlip);
+          await tx.wait();
+          logger.info("Position decreased owner!");
+
+          liquidity = await supplyUni.getOwnerInfo(owner.address, lastPoolId);
+        }
+
+        logger.info(`liquidity ${liquidity}`);
+
+        const daiStratBalance = await dai.balanceOf(supplyUni.address);
+        const usdcStratBalance = await usdc.balanceOf(supplyUni.address);
+
+        logger.info(`dai contract balance  after: ${daiStratBalance}`);
+        logger.info(`usdc contract balance after: ${usdcStratBalance}`);
+
+        const daiOwnerBalanceAfter = await dai.balanceOf(owner.address);
+        const usdcOwnerBalanceAfter = await usdc.balanceOf(owner.address);
+        logger.info(`dai owner balance  after : ${daiOwnerBalanceAfter}`);
+        logger.info(`usdc owner balance after: ${usdcOwnerBalanceAfter}`);
+
+        logger.info(`contract dai balance ${daiStratBalance}`);
+        logger.info(`contract usdc balance ${usdcStratBalance}`);
+        logger.info(`owner liq ${liquidity}`);
+
+        expect(liquidity).to.be.equal(zero);
+        expect(daiStratBalance).to.be.equal(zero);
+        expect(usdcStratBalance).to.be.equal(zero);
+        expect(daiOwnerBalanceAfter).to.be.gt(daiOwnerBalanceBef);
+        expect(usdcOwnerBalanceAfter).to.be.gt(usdcOwnerBalanceBef);
+        expect(tx).to.emit(supplyUni, "Withdraw");
       });
     });
   });
