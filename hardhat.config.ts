@@ -41,6 +41,11 @@ const networkConfig = {
     process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
 };
 
+const secondPk = process.env.PRIVATE_KEY2;
+if (secondPk) {
+  networkConfig.accounts.push(secondPk);
+}
+
 const config: HardhatUserConfig = {
   solidity: {
     compilers: [DEFAULT_COMPILER_SETTINGS],
