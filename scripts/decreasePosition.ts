@@ -4,7 +4,7 @@ import decreaseLoop from "../utils/decreaseLoop";
 const logger = require("pino")();
 
 const { CONTRACT_ADDRESS } = process.env;
-const GAS_LIMIT = BigNumber.from("2074040");
+const GAS_LIMIT = BigNumber.from("2074000");
 
 export default async function decreasePosition(
   poolId: BigNumber,
@@ -22,17 +22,20 @@ export default async function decreasePosition(
   );
 
   // get liquidity
-  const { liquidity: liqOwnerBef } = await supplyUni.getOwnerInfo(
+  const { liquidity: liqOwnerBef, tokenId } = await supplyUni.getOwnerInfo(
     user.address,
     poolId
   );
   logger.info(`liquidity before decreasing: ${liqOwnerBef}`);
+  logger.info(`tokenId: ${tokenId}`);
 
   // for assert post tx if the decrease is completed or not
-  const liquidityExpected = liqOwnerBef
-    .mul(percentageAmm)
-    .div(BigNumber.from(100));
-  logger.info(`liquidity expected: ${liquidityExpected}`);
+  const liquidityExpected = liqOwnerBef.sub(
+    liqOwnerBef.mul(percentageAmm).div(BigNumber.from(100))
+  );
+  logger.info(
+    `liquidity expected to have after decreasing: ${liquidityExpected}`
+  );
 
   const gas = { gasLimit: GAS_LIMIT };
   logger.info("Decreasing position...");
@@ -50,15 +53,15 @@ export default async function decreasePosition(
 
   // Sometimes the pool doesn't decrease the expected liquidity
   // In that case, the same tx is executed in order to get the expected one
-  if (liqOwnerAfter.gt(GAS_LIMIT) && liqOwnerAfter.lt(liquidityExpected)) {
-    const liquidityNeeded = liquidityExpected.sub(liqOwnerAfter);
-    logger.info(`liquidityNeeded: ${liquidityNeeded}`);
+  if (liqOwnerAfter.gt(GAS_LIMIT) && liqOwnerAfter.gt(liquidityExpected)) {
+    // const liquidityNeeded = liqOwnerAfter.sub(liquidityExpected);
+    // logger.info(`liquidityNeeded: ${liquidityNeeded}`);
     logger.info("Entering loop...");
     tx = await decreaseLoop(
       poolId,
       user.address,
       liqOwnerAfter,
-      liquidityNeeded,
+      liquidityExpected,
       maxSlip
     );
   }
