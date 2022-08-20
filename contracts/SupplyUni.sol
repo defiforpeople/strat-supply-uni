@@ -10,7 +10,6 @@ import "@openzeppelin/contracts/math/SafeMath.sol";
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/INonfungiblePositionManager.sol";
 import "@uniswap/v3-periphery/contracts/base/LiquidityManagement.sol";
-import "hardhat/console.sol";
 
 contract SupplyUni is IERC721Receiver, Ownable {
     using SafeMath for uint256;
@@ -23,8 +22,7 @@ contract SupplyUni is IERC721Receiver, Ownable {
         address token1,
         uint256 amount0,
         uint256 amount1,
-        uint24 poolFee,
-        PositionAction action
+        uint24 poolFee
     );
     event Withdraw(
         address indexed sender,
@@ -33,26 +31,18 @@ contract SupplyUni is IERC721Receiver, Ownable {
         address token1,
         uint256 amount0,
         uint256 amount1,
-        uint24 poolFee,
-        PositionAction action
+        uint24 poolFee
     );
     event Delete(address indexed sender, uint256 poolId);
 
     // constants
-    uint256 public constant MAX_SLIPPAGE = 1; // 1%
+    uint256 public constant DEADLINE = 60 * 30; // 30 minutes like Uniswap Front
     INonfungiblePositionManager public constant nonfungiblePositionManager =
         INonfungiblePositionManager(0xC36442b4a4522E871399CD717aBDD847Ab11FE88);
 
     // variables
     uint256 public poolCount; // number of pools, for making ID's incremental
     uint256 private _tokenId;
-
-    /// @dev enum useful in _saveDeposit() function
-    enum PositionAction {
-        MINT,
-        INCREASE,
-        DECREASE
-    }
 
     /// @notice Represents Uniswap V3 pool info + isActive field
     struct Pool {
@@ -67,9 +57,9 @@ contract SupplyUni is IERC721Receiver, Ownable {
     /// @notice Represents the deposit of an NFT
     struct OwnerDeposit {
         uint256 tokenId;
+        uint128 liquidity;
         uint256 amount0;
         uint256 amount1;
-        uint128 liquidity;
         bool initialized;
     }
     /// @dev deposits[address][poolId] => OwnerDeposit
@@ -106,9 +96,25 @@ contract SupplyUni is IERC721Receiver, Ownable {
         return this.onERC721Received.selector;
     }
 
-    // method for calculating max slippage of an amount
-    function _slippageCalc(uint256 amount) internal pure returns (uint256) {
-        return amount - ((amount * MAX_SLIPPAGE) / 100);
+    function _slipCalc(uint256 amount, uint256 maxSlip)
+        internal
+        view
+        returns (uint256)
+    {
+        if (maxSlip == 0) {
+            maxSlip = 1;
+        }
+        return amount - ((amount * maxSlip) / 100);
+    }
+
+    // method for calculating max slippage of an amount, and includes the slippage
+    function _percentageCalc(
+        uint256 amount,
+        uint256 percentageAmm,
+        uint256 maxSlip
+    ) internal view returns (uint256) {
+        uint256 calcAmm = ((percentageAmm * amount) / 100);
+        return _slipCalc(calcAmm, maxSlip);
     }
 
     /// @notice adds a new pool to the strategy
@@ -135,9 +141,9 @@ contract SupplyUni is IERC721Receiver, Ownable {
         // assert pool does not exist
         for (uint256 poolId = 0; poolId < poolCount; poolId++) {
             if (
-                pools[poolId].token0 != token0 &&
-                pools[poolId].token1 != token1 &&
-                pools[poolId].poolFee != poolFee
+                pools[poolId].token0 == token0 &&
+                pools[poolId].token1 == token1 &&
+                pools[poolId].poolFee == poolFee
             ) {
                 revert("Pool already exists");
             }
@@ -164,7 +170,8 @@ contract SupplyUni is IERC721Receiver, Ownable {
     function mintNewPosition(
         uint256 poolId,
         uint256 amm0,
-        uint256 amm1
+        uint256 amm1,
+        uint256 maxSlip
     )
         external
         poolExists(poolId)
@@ -215,27 +222,20 @@ contract SupplyUni is IERC721Receiver, Ownable {
                 token0: pool.token0,
                 token1: pool.token1,
                 fee: pool.poolFee,
-                tickLower: TickMath.MIN_TICK,
-                tickUpper: TickMath.MAX_TICK,
+                tickLower: TickMath.MIN_TICK / int24(2),
+                tickUpper: TickMath.MAX_TICK / int24(2),
                 amount0Desired: amm0,
                 amount1Desired: amm1,
-                amount0Min: 0,
-                amount1Min: 0,
+                amount0Min: _slipCalc(amm0, maxSlip),
+                amount1Min: _slipCalc(amm1, maxSlip),
                 recipient: address(this),
-                deadline: block.timestamp
+                deadline: block.timestamp + DEADLINE
             });
         (tokenId, liquidity, amount0, amount1) = nonfungiblePositionManager
             .mint(params);
 
-        // Create a deposit
-        _saveDeposit(
-            poolId,
-            tokenId,
-            liquidity,
-            amount0,
-            amount1,
-            PositionAction.MINT
-        );
+        // Save the new deposit
+        _saveDeposit(poolId, tokenId, liquidity, amount0, amount1);
 
         // Remove allowance and refund in both assets (when final amount is less than the desired).
         if (amount0 < amm0) {
@@ -265,36 +265,8 @@ contract SupplyUni is IERC721Receiver, Ownable {
             pool.token1,
             amount0,
             amount1,
-            pool.poolFee,
-            PositionAction.MINT
+            pool.poolFee
         );
-    }
-
-    /// @notice Collects the fees associated with provided liquidity
-    /// @dev The contract must hold the erc721 token before it can collect fees
-    ///  tokenId The id of the erc721 token
-    /// @param poolId The id of the pool
-    /// @return amount0 The amount of fees collected in token0
-    /// @return amount1 The amount of fees collected in token1
-    function collectAllFees(uint256 poolId)
-        public
-        poolExists(poolId)
-        senderIdExists(poolId)
-        returns (uint256 amount0, uint256 amount1)
-    {
-        _tokenId = deposits[msg.sender][poolId].tokenId;
-
-        // set amount0Max and amount1Max to uint256.max in params to collect all fees
-        INonfungiblePositionManager.CollectParams
-            memory params = INonfungiblePositionManager.CollectParams({
-                tokenId: _tokenId,
-                recipient: msg.sender,
-                amount0Max: type(uint128).max,
-                amount1Max: type(uint128).max
-            });
-
-        // collect fees
-        (amount0, amount1) = nonfungiblePositionManager.collect(params);
     }
 
     /// @notice Increases liquidity in the current range
@@ -305,7 +277,8 @@ contract SupplyUni is IERC721Receiver, Ownable {
     function increasePosition(
         uint256 poolId,
         uint256 amountAdd0,
-        uint256 amountAdd1
+        uint256 amountAdd1,
+        uint256 maxSlip
     )
         external
         poolExists(poolId)
@@ -359,23 +332,37 @@ contract SupplyUni is IERC721Receiver, Ownable {
                     tokenId: _tokenId,
                     amount0Desired: amountAdd0,
                     amount1Desired: amountAdd1,
-                    amount0Min: 0,
-                    amount1Min: 0,
-                    deadline: block.timestamp
+                    amount0Min: _slipCalc(amountAdd0, maxSlip),
+                    amount1Min: _slipCalc(amountAdd1, maxSlip),
+                    deadline: block.timestamp + DEADLINE
                 });
         /// increase liquidity
         (liquidity, amount0, amount1) = nonfungiblePositionManager
             .increaseLiquidity(params);
 
         // update deposit mapping
-        _saveDeposit(
-            poolId,
-            _tokenId,
-            liquidity,
-            amount0,
-            amount1,
-            PositionAction.INCREASE
-        );
+        _saveDeposit(poolId, _tokenId, liquidity, amount0, amount1);
+
+        // Remove allowance and refund in both assets (when final amount is less than the desired).
+        if (amount0 < amountAdd0) {
+            TransferHelper.safeApprove(
+                pool.token0,
+                address(nonfungiblePositionManager),
+                0
+            );
+            uint256 refund0 = amountAdd0 - amount0;
+            TransferHelper.safeTransfer(pool.token0, msg.sender, refund0);
+        }
+
+        if (amount1 < amountAdd1) {
+            TransferHelper.safeApprove(
+                pool.token1,
+                address(nonfungiblePositionManager),
+                0
+            );
+            uint256 refund1 = amountAdd1 - amount1;
+            TransferHelper.safeTransfer(pool.token1, msg.sender, refund1);
+        }
 
         emit Deposit(
             msg.sender,
@@ -384,9 +371,41 @@ contract SupplyUni is IERC721Receiver, Ownable {
             pool.token1,
             amount0,
             amount1,
-            pool.poolFee,
-            PositionAction.INCREASE
+            pool.poolFee
         );
+    }
+
+    /// @notice Collects the fees associated with provided liquidity
+    /// @dev The contract must hold the erc721 token before it can collect fees
+    ///  tokenId The id of the erc721 token
+    /// @param poolId The id of the pool
+    /// @return amount0 The amount of fees collected in token0
+    /// @return amount1 The amount of fees collected in token1
+    function collectAllFees(uint256 poolId)
+        public
+        poolExists(poolId)
+        senderIdExists(poolId)
+        returns (uint256 amount0, uint256 amount1)
+    {
+        require(
+            deposits[msg.sender][poolId].tokenId > 0,
+            "There is no position from where collect fees"
+        );
+
+        _tokenId = deposits[msg.sender][poolId].tokenId;
+
+        // set amount0Max and amount1Max to uint256.max in params to collect all fees
+        INonfungiblePositionManager.CollectParams
+            memory params = INonfungiblePositionManager.CollectParams({
+                tokenId: _tokenId,
+                recipient: msg.sender,
+                amount0Max: type(uint128).max,
+                amount1Max: type(uint128).max
+            });
+
+        // collect fees
+        (amount0, amount1) = nonfungiblePositionManager.collect(params);
+        // TODO: emit event when collecting fees?
     }
 
     /// @notice A function that decreases the current liquidity given a percentage
@@ -395,7 +414,11 @@ contract SupplyUni is IERC721Receiver, Ownable {
     /// It can be in the range from 1 to 100.
     /// @return amount0 The amount received back in token0
     /// @return amount1 The amount returned back in token1
-    function decreasePosition(uint256 poolId, uint128 percentageAmm)
+    function decreasePosition(
+        uint256 poolId,
+        uint128 percentageAmm,
+        uint256 maxSlip
+    )
         external
         poolExists(poolId)
         senderIdExists(poolId)
@@ -410,14 +433,19 @@ contract SupplyUni is IERC721Receiver, Ownable {
             percentageAmm >= 1 && percentageAmm <= 100,
             "Percentage amount out of range"
         );
+        require(
+            deposits[msg.sender][poolId].liquidity > 0,
+            "There is not liquidity"
+        );
+
+        // get pool for event info
+        Pool memory pool = pools[poolId];
 
         // get tokenId and total liquidity of the sender
-        _tokenId = deposits[msg.sender][poolId].tokenId;
-        uint128 totalLiquidity = deposits[msg.sender][poolId].liquidity;
-        require(totalLiquidity > 0, "There is not liquidity");
-
+        OwnerDeposit memory ownerDeposit = deposits[msg.sender][poolId];
+        uint128 totalLiquidity = ownerDeposit.liquidity;
         // calculate the amount based on the percentage
-        uint128 liquidity = (percentageAmm * totalLiquidity) / 100;
+        uint128 withdrLiquidity = (percentageAmm * totalLiquidity) / 100;
 
         // amount0Min and amount1Min are price slippage checks
         // if the amount received after burning is not greater than these minimums, transaction will fail
@@ -425,10 +453,18 @@ contract SupplyUni is IERC721Receiver, Ownable {
             memory params = INonfungiblePositionManager
                 .DecreaseLiquidityParams({
                     tokenId: _tokenId,
-                    liquidity: liquidity,
-                    amount0Min: 0,
-                    amount1Min: 0,
-                    deadline: block.timestamp
+                    liquidity: withdrLiquidity,
+                    amount0Min: _percentageCalc(
+                        ownerDeposit.amount0,
+                        percentageAmm,
+                        maxSlip
+                    ),
+                    amount1Min: _percentageCalc(
+                        ownerDeposit.amount1,
+                        percentageAmm,
+                        maxSlip
+                    ),
+                    deadline: block.timestamp + DEADLINE
                 });
 
         // decrease position
@@ -436,28 +472,18 @@ contract SupplyUni is IERC721Receiver, Ownable {
             params
         );
 
-        // update the deposit mapping
-        uint256 decreasedLiquidity = amount0 + amount1;
-        _saveDeposit(
-            poolId,
-            _tokenId,
-            uint128(decreasedLiquidity),
-            amount0,
-            amount1,
-            PositionAction.DECREASE
-        );
+        // collect earned fees
+        collectAllFees(poolId);
 
-        uint256 remainingLiquidity;
-        (, remainingLiquidity) = uint256(totalLiquidity).trySub(
-            decreasedLiquidity
-        );
+        // get and update position
+        (, , , , , , , uint128 liquidity, , , , ) = nonfungiblePositionManager
+            .positions(_tokenId);
+
+        // update deposit
+        _saveDeposit(poolId, _tokenId, liquidity, amount0, amount1);
 
         //send liquidity back to owner
-        // TODO(nb): check if this way to collect is correct
-        collectAllFees(poolId);
-        _sendToOwner(_tokenId, amount0, amount1, uint128(remainingLiquidity));
-
-        Pool memory pool = pools[poolId];
+        _sendToOwner(_tokenId, amount0, amount1);
 
         emit Withdraw(
             msg.sender,
@@ -466,8 +492,7 @@ contract SupplyUni is IERC721Receiver, Ownable {
             pool.token1,
             amount0,
             amount1,
-            pool.poolFee,
-            PositionAction.DECREASE
+            pool.poolFee
         );
     }
 
@@ -475,44 +500,24 @@ contract SupplyUni is IERC721Receiver, Ownable {
     /// @param poolId The pool id
     /// @param tokenId The sender id from his NFT position
     /// @param liquidity The total amount of liquidity
-    /// @param amount0 The amount of token0
-    /// @param amount1 The amount of token1
-    /// @param action The action that is going to be saved. It can be MINT, INCREASE OR DECREASE.
     /// Is necessary because the operation changes based on that
     function _saveDeposit(
         uint256 poolId,
         uint256 tokenId,
         uint128 liquidity,
         uint256 amount0,
-        uint256 amount1,
-        PositionAction action
+        uint256 amount1
     ) internal {
-        // for save a new position
-        if (action == PositionAction.MINT) {
-            OwnerDeposit memory deposit = OwnerDeposit({
-                tokenId: tokenId,
-                liquidity: liquidity,
-                amount0: amount0,
-                amount1: amount1,
-                initialized: true
-            });
-
-            deposits[msg.sender][poolId] = deposit;
-            return;
-        }
-
-        // for save an increase in position
-        if (action == PositionAction.INCREASE) {
-            deposits[msg.sender][poolId].liquidity += liquidity;
-            deposits[msg.sender][poolId].amount0 += amount0;
-            deposits[msg.sender][poolId].amount1 += amount1;
-            return;
-        }
-
-        // For save a decrease in position
-        deposits[msg.sender][poolId].liquidity -= liquidity;
-        deposits[msg.sender][poolId].amount0 -= amount0;
-        deposits[msg.sender][poolId].amount1 -= amount1;
+        // this variable is for asserting that the deposit is initialized
+        bool initialized = true;
+        // save in the mapping
+        deposits[msg.sender][poolId] = OwnerDeposit(
+            tokenId,
+            liquidity,
+            amount0,
+            amount1,
+            initialized
+        );
     }
 
     /// @notice Transfers funds to owner of NFT
@@ -522,8 +527,7 @@ contract SupplyUni is IERC721Receiver, Ownable {
     function _sendToOwner(
         uint256 poolId,
         uint256 amount0,
-        uint256 amount1,
-        uint128 liquidity
+        uint256 amount1
     ) internal {
         address token0 = pools[poolId].token0;
         address token1 = pools[poolId].token1;
@@ -531,11 +535,6 @@ contract SupplyUni is IERC721Receiver, Ownable {
         // transfer amounts to owner
         TransferHelper.safeTransfer(token0, msg.sender, amount0);
         TransferHelper.safeTransfer(token1, msg.sender, amount1);
-
-        // TODO(nb): check if the position is removed from Uni when liquidity is 0
-        if (liquidity == 0) {
-            delete deposits[msg.sender][poolId];
-        }
     }
 
     /// @notice Transfers the NFT to the owner
