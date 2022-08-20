@@ -6,7 +6,7 @@ async function deploy() {
 
   await supplyUni.deployed();
 
-  console.log("supplyUni with 1 ETH deployed to:", supplyUni.address);
+  console.log("supplyUni deployed to:", supplyUni.address);
 }
 
 // We recommend this pattern to be able to use async/await everywhere
