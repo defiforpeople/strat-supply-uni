@@ -30,8 +30,8 @@ export default async function increasePosition(
 
   const gas = { gasLimit: GAS_LIMIT };
   logger.info("Approving...");
-  await token0.connect(user).approve(supplyUni.address, amm0);
-  await token1.connect(user).approve(supplyUni.address, amm1);
+  await token0.connect(user).approve(supplyUni.address, amm0, gas);
+  await token1.connect(user).approve(supplyUni.address, amm1, gas);
   logger.info("Approved!");
 
   logger.info("Increasing position...");
