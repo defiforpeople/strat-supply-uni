@@ -452,7 +452,7 @@ contract SupplyUni is IERC721Receiver, Ownable {
         INonfungiblePositionManager.DecreaseLiquidityParams
             memory params = INonfungiblePositionManager
                 .DecreaseLiquidityParams({
-                    tokenId: _tokenId,
+                    tokenId: ownerDeposit.tokenId,
                     liquidity: withdrLiquidity,
                     amount0Min: _percentageCalc(
                         ownerDeposit.amount0,
@@ -477,13 +477,13 @@ contract SupplyUni is IERC721Receiver, Ownable {
 
         // get and update position
         (, , , , , , , uint128 liquidity, , , , ) = nonfungiblePositionManager
-            .positions(_tokenId);
+            .positions(ownerDeposit.tokenId);
 
         // update deposit
-        _saveDeposit(poolId, _tokenId, liquidity, amount0, amount1);
+        _saveDeposit(poolId, ownerDeposit.tokenId, liquidity, amount0, amount1);
 
         //send liquidity back to owner
-        _sendToOwner(_tokenId, amount0, amount1);
+        _sendToOwner(ownerDeposit.tokenId, amount0, amount1);
 
         emit Withdraw(
             msg.sender,
