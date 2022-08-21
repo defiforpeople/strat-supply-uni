@@ -5,17 +5,19 @@ import { waffleChai } from "@ethereum-waffle/chai";
 import { BigNumber, ContractTransaction } from "ethers";
 import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
 import { SupplyUni, IERC20 } from "../../typechain-types";
-import addPool from "../../scripts/addPool";
-import increasePosition from "../../scripts/increasePosition";
-import decreasePosition from "../../scripts/decreasePosition";
-import mintNewPosition from "../../scripts/mintNewPosition";
-import collectAllFees from "../../scripts/collectAllFees";
-import retrieveNFT from "../../scripts/retrieveNFT";
+import {
+  addPool,
+  mintNewPosition,
+  increasePosition,
+  collectAllFees,
+  decreasePosition,
+  retrieveNFT,
+} from "../../scripts/index";
 const logger = require("pino")();
 use(waffleChai);
 
-// token0: wmatic token1: weth on mumbai
-const { TOKEN0_ADDRESS, TOKEN1_ADDRESS, CONTRACT_ADDRESS } = process.env;
+const { TOKEN0_ADDRESS, TOKEN1_ADDRESS, CONTRACT_ADDRESS, POOL_FEE } =
+  process.env;
 const GAS_LIMIT = BigNumber.from("2074000");
 const gas = { gasLimit: GAS_LIMIT };
 
@@ -34,34 +36,28 @@ if (network.name === ("hardhat" || "localhost")) {
     let lastPoolId: BigNumber;
     let poolFee: BigNumber;
     let maxSlip: BigNumber;
+    let zero: BigNumber;
 
     beforeEach(async () => {
-      const zero = BigNumber.from(0);
+      // define a zero variable
+      zero = BigNumber.from(0);
 
+      // get wallets
       [owner, user] = await ethers.getSigners();
 
+      // get SupplyUni strategy contract
       supplyUni = await ethers.getContractAt(
         "SupplyUni",
         `${CONTRACT_ADDRESS}`
       );
 
+      // get tokens
       token0 = await ethers.getContractAt("IERC20", `${TOKEN0_ADDRESS}`);
       token1 = await ethers.getContractAt("IERC20", `${TOKEN1_ADDRESS}`);
 
-      const ownerBalance = await ethers.provider.getBalance(owner.address);
-      logger.info(`owner ETH balance at beggining   : ${ownerBalance}`);
+      // fee of the pool
+      poolFee = BigNumber.from(`${POOL_FEE}`);
 
-      const token0Balance = await token0.balanceOf(owner.address);
-      const token1Balance = await token1.balanceOf(owner.address);
-      logger.info(`token0 owner balance at beggining: ${token0Balance}`);
-      logger.info(`token1 owner balance at beggining: ${token1Balance}`);
-
-      amount = token0Balance.gt(token1Balance) ? token1Balance : token0Balance;
-      amount = amount.div(20);
-      logger.info(`amount                           : ${amount}`);
-
-      // id of the pool
-      poolFee = BigNumber.from("100");
       // if there is no pool created, create one
       let recentlyCreated = false;
       lastPoolId = (await supplyUni.connect(owner).poolCount()).sub(1);
@@ -70,6 +66,8 @@ if (network.name === ("hardhat" || "localhost")) {
         lastPoolId = lastPoolId.add(1);
         recentlyCreated = true;
       }
+
+      // if a pool hasn't been recentrly created, check if is the same we want to add
       if (!recentlyCreated) {
         // get pool
         const pool = await supplyUni.getPool(lastPoolId);
@@ -91,29 +89,27 @@ if (network.name === ("hardhat" || "localhost")) {
     });
 
     describe("test all the functions with a single user", () => {
-      it("should do all with 1 signer", async () => {
-        const zero = BigNumber.from(0);
+      it.only("should do all with 1 signer", async () => {
+        // define tx var
         let tx: ContractTransaction;
 
-        logger.info(
-          `useer gas balance: ${await ethers.provider.getBalance(user.address)}`
-        );
+        // get owner gas balance and print
+        const ownerBalance = await ethers.provider.getBalance(owner.address);
+        logger.info(`start gas owner balance  : ${ownerBalance}`);
 
-        // Uniswap V3 liquidity manager contract
-        const managerAddr = await supplyUni.nonfungiblePositionManager();
-        const manager = await ethers.getContractAt(
-          "INonfungiblePositionManager",
-          managerAddr
-        );
-
+        // get owner token balances at the beggining
         const token0OwnerBalanceStart = await token0.balanceOf(owner.address);
         const token1OwnerBalanceStart = await token1.balanceOf(owner.address);
+        logger.info(`Star token0 owner balance: ${token0OwnerBalanceStart}`);
+        logger.info(`Star token1 owner balance: ${token1OwnerBalanceStart}`);
 
         const mintOwnerAmm = token0OwnerBalanceStart
           .div(2)
           .gt(token1OwnerBalanceStart.div(2))
           ? token1OwnerBalanceStart.div(2)
           : token0OwnerBalanceStart.div(2);
+        // get amount (same quantity for a 50/50 amount distribution of tokens in the position)
+        logger.info(`mintOwnerAmm                  : ${mintOwnerAmm}`);
 
         let { tokenId: ownerMintId } = await supplyUni.getOwnerInfo(
           owner.address,
