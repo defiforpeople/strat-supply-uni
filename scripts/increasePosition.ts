@@ -6,7 +6,7 @@ const logger = require("pino")();
 const { CONTRACT_ADDRESS } = process.env;
 const GAS_LIMIT = 2074000;
 
-export default async function increasePosition(
+export async function increasePosition(
   poolId: BigNumber,
   userAddr: string,
   token0Addr: string,

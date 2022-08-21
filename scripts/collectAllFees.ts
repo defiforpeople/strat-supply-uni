@@ -6,7 +6,7 @@ const logger = require("pino")();
 const { CONTRACT_ADDRESS } = process.env;
 const GAS_LIMIT = BigNumber.from("2074000");
 
-export default async function collectAllFees(
+export async function collectAllFees(
   poolId: BigNumber,
   userAddr: string
 ): Promise<ContractTransaction> {

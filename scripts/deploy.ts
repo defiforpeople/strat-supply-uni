@@ -1,6 +1,6 @@
 import { ethers } from "hardhat";
 
-async function deploy() {
+export async function deploy() {
   const supplyUniFactory = await ethers.getContractFactory("SupplyUni");
   const supplyUni = await supplyUniFactory.deploy();
 

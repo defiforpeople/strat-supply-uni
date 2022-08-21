@@ -5,7 +5,7 @@ const logger = require("pino")();
 const { CONTRACT_ADDRESS } = process.env;
 const GAS_LIMIT = 2074040;
 
-export default async function mintNewPosition(
+export async function mintNewPosition(
   poolId: BigNumber,
   userAddr: string,
   token0Addr: string,
