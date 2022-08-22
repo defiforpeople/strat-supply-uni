@@ -62,7 +62,12 @@ if (network.name === ("hardhat" || "localhost")) {
       let recentlyCreated = false;
       lastPoolId = (await supplyUni.connect(owner).poolCount()).sub(1);
       if (lastPoolId.lt(zero)) {
-        await addPool(token0.address, token1.address, poolFee);
+        await addPool(
+          supplyUni.address,
+          token0.address,
+          token1.address,
+          poolFee
+        );
         lastPoolId = lastPoolId.add(1);
         recentlyCreated = true;
       }
@@ -78,7 +83,12 @@ if (network.name === ("hardhat" || "localhost")) {
 
         // create the pool if is not initialized yet with the params we set
         if (pool.toString() !== lastPool.toString()) {
-          await addPool(token0.address, token1.address, poolFee);
+          await addPool(
+            supplyUni.address,
+            token0.address,
+            token1.address,
+            poolFee
+          );
           lastPoolId = lastPoolId.add(1);
         }
       }
@@ -121,6 +131,7 @@ if (network.name === ("hardhat" || "localhost")) {
           // mint new position owner
           logger.info("Minting new position owner...");
           tx = await mintNewPosition(
+            supplyUni.address,
             lastPoolId,
             owner.address,
             token0.address,
@@ -143,7 +154,7 @@ if (network.name === ("hardhat" || "localhost")) {
 
         // collect fees
         logger.info("Collecting fees owner...");
-        tx = await collectAllFees(lastPoolId, owner.address);
+        tx = await collectAllFees(supplyUni.address, lastPoolId, owner.address);
         logger.info("Collected!");
 
         // increase position
@@ -158,6 +169,7 @@ if (network.name === ("hardhat" || "localhost")) {
 
         logger.info(`increasing position owner...`);
         tx = await increasePosition(
+          supplyUni.address,
           lastPoolId,
           owner.address,
           token0.address,
@@ -177,6 +189,7 @@ if (network.name === ("hardhat" || "localhost")) {
         const decrOwnerPerc = BigNumber.from(100);
         logger.info("Decreasing position owner...");
         tx = await decreasePosition(
+          supplyUni.address,
           lastPoolId,
           owner.address,
           decrOwnerPerc,
@@ -190,7 +203,7 @@ if (network.name === ("hardhat" || "localhost")) {
 
         // retrieve nft of position
         logger.info("Retrieving NFT...");
-        tx = await retrieveNFT(lastPoolId, owner.address);
+        tx = await retrieveNFT(supplyUni.address, lastPoolId, owner.address);
         logger.info("Retrieved NFT!");
         // getting tokenId after retrieving position (shouldn't exists so should be 0)
         const { tokenId: ownerId } = await supplyUni.getOwnerInfo(
@@ -247,6 +260,7 @@ if (network.name === ("hardhat" || "localhost")) {
           // mint new position owner
           logger.info("Minting new position owner...");
           tx = await mintNewPosition(
+            supplyUni.address,
             lastPoolId,
             owner.address,
             token0.address,
@@ -283,6 +297,7 @@ if (network.name === ("hardhat" || "localhost")) {
 
           logger.info("Minting new position user...");
           tx = await mintNewPosition(
+            supplyUni.address,
             lastPoolId,
             user.address,
             token0.address,
@@ -330,6 +345,7 @@ if (network.name === ("hardhat" || "localhost")) {
 
         logger.info(`increasing position owner...`);
         const incrTx0 = await increasePosition(
+          supplyUni.address,
           lastPoolId,
           owner.address,
           token0.address,
@@ -350,6 +366,7 @@ if (network.name === ("hardhat" || "localhost")) {
 
         logger.info(`increasing position user...`);
         const incrTx1 = await increasePosition(
+          supplyUni.address,
           lastPoolId,
           user.address,
           token0.address,
@@ -369,6 +386,7 @@ if (network.name === ("hardhat" || "localhost")) {
         const decrOwnerPerc = BigNumber.from(100);
         logger.info("Decreasing position owner...");
         const withdrTx0 = await decreasePosition(
+          supplyUni.address,
           lastPoolId,
           owner.address,
           decrOwnerPerc,
@@ -379,6 +397,7 @@ if (network.name === ("hardhat" || "localhost")) {
         const decrUserPerc = BigNumber.from(100);
         logger.info("Decreasing position user...");
         const withdrTx1 = await decreasePosition(
+          supplyUni.address,
           lastPoolId,
           user.address,
           decrUserPerc,
