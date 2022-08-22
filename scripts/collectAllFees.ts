@@ -3,10 +3,11 @@ import { BigNumber, ContractTransaction } from "ethers";
 import { SupplyUni } from "../typechain-types";
 const logger = require("pino")();
 
-const { CONTRACT_ADDRESS } = process.env;
 const GAS_LIMIT = BigNumber.from("2074000");
 
 export async function collectAllFees(
+  supplyUniAddr: string,
+
   poolId: BigNumber,
   userAddr: string
 ): Promise<ContractTransaction> {
@@ -15,7 +16,7 @@ export async function collectAllFees(
   const user = await ethers.getSigner(userAddr);
   const supplyUni = (await ethers.getContractAt(
     "SupplyUni",
-    CONTRACT_ADDRESS!
+    supplyUniAddr
   )) as SupplyUni;
 
   logger.info("Collecting all fees...");

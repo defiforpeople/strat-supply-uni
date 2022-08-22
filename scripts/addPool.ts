@@ -3,10 +3,10 @@ import { BigNumber, ContractTransaction } from "ethers";
 import { SupplyUni } from "../typechain-types";
 const logger = require("pino")();
 
-const { CONTRACT_ADDRESS } = process.env;
 const GAS_LIMIT = BigNumber.from("2074000");
 
 export async function addPool(
+  supplyUniAddr: string,
   token0Addr: string,
   token1Addr: string,
   poolFee: BigNumber
@@ -15,7 +15,7 @@ export async function addPool(
   const [owner] = await ethers.getSigners();
   const supplyUni = (await ethers.getContractAt(
     "SupplyUni",
-    CONTRACT_ADDRESS!
+    supplyUniAddr
   )) as SupplyUni;
 
   logger.info("Adding new pool...");
