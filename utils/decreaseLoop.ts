@@ -2,18 +2,18 @@ import { BigNumber, ContractTransaction } from "ethers";
 import { ethers } from "hardhat";
 const logger = require("pino")();
 
-const { CONTRACT_ADDRESS } = process.env;
 const GAS_LIMIT = BigNumber.from("2074000");
 let tx: ContractTransaction;
 
 export default async function decreaseLoop(
+  supplyUniAddr: string,
   poolId: BigNumber,
   userAddr: string,
   liquidityRemaining: BigNumber,
   liquidityNeeded: BigNumber,
   maxSlip: BigNumber
 ): Promise<ContractTransaction> {
-  const supplyUni = await ethers.getContractAt("SupplyUni", CONTRACT_ADDRESS!);
+  const supplyUni = await ethers.getContractAt("SupplyUni", supplyUniAddr!);
   const user = await ethers.getSigner(userAddr);
 
   let liquidity = liquidityRemaining;
@@ -48,7 +48,7 @@ export default async function decreaseLoop(
 
     // get againg the liquidity for the loop to continue or not
     const { liquidity: liqUserAfter } = await supplyUni.getOwnerInfo(
-      userAddr,
+      user.address,
       poolId
     );
 

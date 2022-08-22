@@ -2,10 +2,10 @@ import { BigNumber, ContractTransaction } from "ethers";
 import { ethers } from "hardhat";
 const logger = require("pino")();
 
-const { CONTRACT_ADDRESS } = process.env;
 const GAS_LIMIT = 2074040;
 
-export default async function mintNewPosition(
+export async function mintNewPosition(
+  supplyUniAddr: string,
   poolId: BigNumber,
   userAddr: string,
   token0Addr: string,
@@ -18,10 +18,7 @@ export default async function mintNewPosition(
   const user = await ethers.getSigner(userAddr);
 
   // get strat contract
-  const supplyUni = await ethers.getContractAt(
-    "SupplyUni",
-    `${CONTRACT_ADDRESS}`
-  );
+  const supplyUni = await ethers.getContractAt("SupplyUni", supplyUniAddr);
 
   // get tokens
   const token0 = await ethers.getContractAt("IERC20", token0Addr);

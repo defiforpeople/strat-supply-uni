@@ -3,10 +3,10 @@ import { BigNumber, ContractTransaction } from "ethers";
 import { SupplyUni } from "../typechain-types";
 const logger = require("pino")();
 
-const { CONTRACT_ADDRESS } = process.env;
 const GAS_LIMIT = BigNumber.from("2074000");
 
-export default async function retrieveNFT(
+export async function retrieveNFT(
+  supplyUniAddr: string,
   poolId: BigNumber,
   userAddr: string
 ): Promise<ContractTransaction> {
@@ -15,7 +15,7 @@ export default async function retrieveNFT(
   const user = await ethers.getSigner(userAddr);
   const supplyUni = (await ethers.getContractAt(
     "SupplyUni",
-    CONTRACT_ADDRESS!
+    supplyUniAddr
   )) as SupplyUni;
 
   logger.info("Retrieving NFT of the position...");

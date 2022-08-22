@@ -55,9 +55,7 @@ const config: HardhatUserConfig = {
     mumbai: networkConfig,
     rinkeby: networkConfig,
     hardhat: {
-      loggingEnabled: false,
       forking: {
-        enabled: true,
         url: process.env.URL || "",
       },
     },

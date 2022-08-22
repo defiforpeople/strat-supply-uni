@@ -3,10 +3,10 @@ import { ethers } from "hardhat";
 import decreaseLoop from "../utils/decreaseLoop";
 const logger = require("pino")();
 
-const { CONTRACT_ADDRESS } = process.env;
 const GAS_LIMIT = BigNumber.from("2074000");
 
-export default async function decreasePosition(
+export async function decreasePosition(
+  supplyUniAddr: string,
   poolId: BigNumber,
   userAddr: string,
   percentageAmm: BigNumber,
@@ -16,10 +16,7 @@ export default async function decreasePosition(
   const user = await ethers.getSigner(userAddr);
 
   // get strat contract
-  const supplyUni = await ethers.getContractAt(
-    "SupplyUni",
-    `${CONTRACT_ADDRESS}`
-  );
+  const supplyUni = await ethers.getContractAt("SupplyUni", supplyUniAddr);
 
   // get liquidity
   const { liquidity: liqOwnerBef, tokenId } = await supplyUni.getOwnerInfo(
@@ -58,6 +55,7 @@ export default async function decreasePosition(
     // logger.info(`liquidityNeeded: ${liquidityNeeded}`);
     logger.info("Entering loop...");
     tx = await decreaseLoop(
+      supplyUni.address,
       poolId,
       user.address,
       liqOwnerAfter,

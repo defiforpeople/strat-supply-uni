@@ -3,10 +3,10 @@ import { ethers } from "hardhat";
 import { SupplyUni, IERC20 } from "../typechain-types";
 const logger = require("pino")();
 
-const { CONTRACT_ADDRESS } = process.env;
 const GAS_LIMIT = 2074000;
 
-export default async function increasePosition(
+export async function increasePosition(
+  supplyUniAddr: string,
   poolId: BigNumber,
   userAddr: string,
   token0Addr: string,
@@ -21,7 +21,7 @@ export default async function increasePosition(
   // get strat contract
   const supplyUni = (await ethers.getContractAt(
     "SupplyUni",
-    CONTRACT_ADDRESS!
+    supplyUniAddr
   )) as SupplyUni;
 
   // get tokens
